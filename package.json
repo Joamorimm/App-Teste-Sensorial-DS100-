@@ -1,0 +1,22 @@
+{
+  "name": "ds100-prova-sensorial",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js",
+    "test": "node tests/run.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.22.3",
+    "pg": "^8.23.1",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.2"
+  }
+}

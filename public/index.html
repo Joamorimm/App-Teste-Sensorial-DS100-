@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>DS100 — Prova Sensorial</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#123317" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="DS100" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="icon" href="icons/icon-192.png" />
+<style>
+:root{
+  --verde-escuro:#123317; --verde-escuro2:#1b4a22; --verde:#46962b; --verde-claro:#eaf6e4;
+  --accent:#ff7a4d; --accent-dark:#e85f33;
+  --cinza-bg:#f4f5f7; --texto:#1c2320; --texto-suave:#6b756f;
+  --ok-bg:#e3f6e8; --ok-tx:#1b7a3c; --bloq-bg:#fdeceb; --bloq-tx:#c23b2e; --info-bg:#eef1f4; --info-tx:#44504a;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;overscroll-behavior:none;-webkit-user-select:none;user-select:none;touch-action:manipulation;}
+body{font-family:-apple-system,'SF Pro Text','Segoe UI',Roboto,Arial,sans-serif;background:#cfd6cf;color:var(--texto);overflow:hidden;}
+input,textarea{-webkit-user-select:text;user-select:text;}
+
+#app{max-width:480px;margin:0 auto;height:100dvh;height:100vh;background:var(--cinza-bg);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 0 36px rgba(0,0,0,.25);position:relative;}
+
+header{background:linear-gradient(160deg,var(--verde-escuro) 0%,var(--verde-escuro2) 100%);color:#fff;padding:env(safe-area-inset-top) 20px 26px;padding-top:calc(env(safe-area-inset-top) + 16px);border-radius:0 0 26px 26px;position:relative;z-index:1;flex-shrink:0;}
+.header-top{display:flex;align-items:center;justify-content:space-between;}
+.marca{display:flex;align-items:center;gap:8px;}
+.marca-icon{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;}
+.marca-texto{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#bfe3c6;font-weight:700;}
+.voltar{background:rgba(255,255,255,.14);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+#tituloHeader{font-size:21px;margin:14px 0 2px;font-weight:700;letter-spacing:.2px;}
+.subtitulo{font-size:12.5px;color:#bcd9c0;margin:0;}
+.contador-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);color:#fff;font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;margin-top:12px;}
+.contador-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+
+main{flex:1;padding:18px 20px 28px;overflow-y:auto;-webkit-overflow-scrolling:touch;margin-top:-16px;z-index:2;}
+
+.tela{display:none;opacity:0;transform:translateY(10px);}
+.tela.ativa{display:block;animation:entrar .25s cubic-bezier(.2,.8,.3,1) forwards;}
+@keyframes entrar{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+
+.card{background:#fff;border-radius:18px;box-shadow:0 2px 14px rgba(20,40,20,.06);padding:16px;}
+.titulo-secao{font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--texto-suave);margin:0 0 10px 2px;}
+
+.busca{width:100%;box-sizing:border-box;padding:14px 16px;font-size:16px;border:2px solid #e4e7e2;border-radius:14px;background:#fff;margin-bottom:12px;font-family:inherit;}.busca:focus{outline:none;border-color:var(--verde);}
+.lista-aprovadores{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+.lista-aprovadores li{background:#fff;border-radius:16px;padding:13px 14px;display:flex;align-items:center;gap:12px;font-weight:600;font-size:15.5px;cursor:pointer;box-shadow:0 2px 10px rgba(20,40,20,.05);transition:transform .08s;}
+.lista-aprovadores li:active{transform:scale(.98);background:var(--verde-claro);}
+.avatar{width:38px;height:38px;border-radius:50%;background:var(--verde-claro);color:var(--verde-escuro2);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0;}
+.chevron{margin-left:auto;color:#c7cdc8;font-size:18px;}
+
+.campo{margin-bottom:14px;}
+.campo label{display:block;font-size:12px;font-weight:700;color:var(--texto-suave);margin-bottom:8px;text-transform:uppercase;letter-spacing:.6px;}
+.input-wrap{display:flex;gap:8px;}
+.campo input{flex:1;width:100%;padding:16px 14px;font-size:19px;font-weight:700;letter-spacing:1px;border:2px solid #e4e7e2;background:#fff;border-radius:14px;text-transform:uppercase;}
+.campo input:focus{outline:none;border-color:var(--verde);}
+
+button.primario{width:100%;padding:17px;font-size:16px;font-weight:800;background:var(--accent);color:#fff;border:none;border-radius:16px;cursor:pointer;box-shadow:0 8px 18px rgba(255,122,77,.35);transition:transform .08s,opacity .15s;}
+button.primario:active{transform:scale(.97);}
+button.primario:disabled{background:#c6cbc7;box-shadow:none;}
+button.secundario{width:100%;padding:15px;font-size:14.5px;font-weight:700;background:#fff;color:var(--verde-escuro2);border:2px solid #e4e7e2;border-radius:16px;margin-top:10px;cursor:pointer;transition:transform .08s;}
+button.secundario:active{transform:scale(.97);}
+
+.estado-pill{display:inline-flex;align-items:center;gap:8px;font-weight:800;font-size:14px;padding:12px 14px;border-radius:14px;margin-bottom:16px;width:100%;}
+.estado-livre{background:var(--ok-bg);color:var(--ok-tx);}
+.estado-bloqueada{background:var(--bloq-bg);color:var(--bloq-tx);}
+.estado-info{background:var(--info-bg);color:var(--info-tx);}
+
+.linha{display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:14px;border-bottom:1px solid #eef0ec;}
+.linha:last-child{border-bottom:none;}
+.linha span{color:var(--texto-suave);font-weight:600;}
+.linha b{font-weight:800;font-size:15px;}
+
+.open-hero{text-align:center;padding:26px 10px 10px;}
+.open-hero .selo{width:62px;height:62px;border-radius:50%;background:var(--verde-claro);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:28px;}
+.open-hero h2{margin:0 0 4px;font-size:22px;}
+.open-hero p{margin:0;color:var(--texto-suave);font-size:13.5px;}
+
+.msg-erro{color:var(--bloq-tx);font-size:13.5px;margin-top:10px;min-height:16px;font-weight:600;}
+.badge-op{display:inline-block;background:var(--verde-claro);color:var(--verde-escuro2);font-size:11px;font-weight:800;padding:3px 9px;border-radius:8px;}
+
+#loginTop{flex-shrink:0;background:#fff;}
+.login-bar{display:flex;justify-content:space-between;align-items:center;padding:calc(env(safe-area-inset-top) + 12px) 20px 10px;}
+.logo-login{display:flex;align-items:center;gap:10px;}
+.logo-login .logo-texto{font-family:Georgia,'Times New Roman',serif;color:var(--verde);font-weight:700;font-size:20px;line-height:1.05;}
+.logo-login .logo-texto span{font-size:10px;vertical-align:super;}
+.login-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+#btnRefresh{background:none;border:none;font-size:30px;line-height:1;color:var(--verde-escuro);cursor:pointer;padding:2px 4px;}
+#btnRefresh.girar{animation:girar .6s linear;}
+@keyframes girar{to{transform:rotate(360deg);}}
+.logo-ds100{height:36px;width:auto;display:block;}
+.tag-ds100{color:var(--verde);font-weight:800;font-size:18px;letter-spacing:.5px;}
+.login-banner{background:var(--verde);color:#fff;font-weight:700;font-size:17px;text-align:center;padding:24px 20px;}
+.login-banner #tituloHeader{font-size:17px;margin:0;letter-spacing:0;}
+.login-banner .contador-pill{margin-top:10px;background:rgba(255,255,255,.2);}
+.login-right .voltar svg{display:block;}
+.login-right .voltar{display:flex;align-items:center;justify-content:center;padding:0;background:var(--verde-claro);color:var(--verde-escuro);width:38px;height:38px;font-size:20px;}
+main{margin-top:0;padding-top:16px;}
+.logo-img{height:56px;width:auto;display:block;}
+
+.tile{background:#fff;border-radius:22px;padding:22px 18px;display:flex;align-items:center;gap:14px;margin-bottom:16px;box-shadow:0 6px 22px rgba(20,40,20,.09);border:1.5px solid #edf2ea;cursor:pointer;transition:transform .08s;}
+.tile-icon{width:62px;height:62px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}.tile-icon svg{width:56px;height:56px;}.tile:active{transform:scale(.98);}
+.tile-icon{width:58px;height:58px;border-radius:16px;background:var(--verde-claro);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;}
+.tile-txt{display:flex;flex-direction:column;gap:3px;}
+.tile-txt b{font-size:20px;color:var(--verde-escuro);}
+.tile-txt span{font-size:12.5px;color:var(--texto-suave);}
+.link-sup{display:block;margin:22px auto 0;background:none;border:none;color:var(--verde-escuro2);font-weight:700;font-size:13.5px;text-decoration:underline;cursor:pointer;}
+.chips{display:flex;flex-wrap:wrap;gap:8px;}
+.chip{background:#fff;border-radius:12px;padding:8px 12px;font-weight:800;font-size:14px;box-shadow:0 2px 8px rgba(20,40,20,.06);cursor:pointer;display:flex;flex-direction:column;align-items:center;line-height:1.15;}
+.chip small{font-weight:600;font-size:10px;color:var(--texto-suave);}
+.chip:active{background:var(--verde-claro);}
+
+.log-resumo{display:flex;gap:8px;margin-bottom:10px;}
+.log-kpi{flex:1;border-radius:14px;padding:10px 6px;text-align:center;display:flex;flex-direction:column;}
+.log-kpi b{font-size:24px;line-height:1.1;}.log-kpi span{font-size:11px;font-weight:700;}
+.log-kpi.verde{background:#dff3d8;color:#1b6b1a;}.log-kpi.verm{background:#fde3e0;color:#b3261e;}.log-kpi.cinza{background:#e9ecea;color:#56605a;}
+.log-lado{font-size:13px;color:var(--texto-suave);margin-bottom:10px;}
+.log-sec{font-size:11px;font-weight:800;color:var(--texto-suave);margin:10px 0 6px;letter-spacing:.5px;}
+.log-fila{display:flex;gap:6px;margin-bottom:6px;}.log-fila .mesa{flex:1;min-width:0;}.log-fila .mesa.solta{flex:0 0 50%;margin:0 auto;}.log-corredor{text-align:center;font-size:10px;color:#b4bcb7;letter-spacing:1px;text-transform:uppercase;margin:2px 0 8px;border-top:1px dashed #dfe3e0;padding-top:3px;}
+.mesa{border-radius:12px;padding:9px 2px 7px;text-align:center;font-weight:800;font-size:15px;line-height:1.1;cursor:pointer;border:2px solid transparent;transition:transform .08s;}
+.mesa small{display:block;font-weight:700;font-size:10px;margin-top:2px;opacity:.85;}
+.mesa:active{transform:scale(.95);}
+.mesa.pronta{background:#46962b;color:#fff;box-shadow:0 4px 10px rgba(70,150,43,.4);}
+.mesa.em_prova{background:#ffe3a0;color:#7a5200;}
+.mesa.misu{background:#e5483b;color:#fff;}
+.l-prova{background:#ffe3a0;}
+.mesa.levantada{background:#e9ecea;color:#8a948e;text-decoration:line-through;}
+.mesa.sem_lote{background:#fff;color:#c2c8c4;border-color:#eceeed;cursor:default;}
+.log-legenda{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-size:11px;color:var(--texto-suave);margin:14px 0 4px;}
+.log-legenda i{width:12px;height:12px;border-radius:4px;display:inline-block;margin-right:-4px;}
+.l-verde{background:#46962b;}.l-verm{background:#e5483b;}.l-lev{background:#cfd4d1;}.l-vazia{background:#fff;border:1px solid #d6dbd8;}
+.modal{position:fixed;inset:0;background:rgba(10,25,12,.5);z-index:50;display:flex;align-items:flex-end;}
+.modal-box{background:#fff;width:100%;border-radius:22px 22px 0 0;padding:22px 20px calc(env(safe-area-inset-bottom) + 20px);}
+.modal-box h3{margin:0 0 6px;font-size:20px;}.modal-box p{margin:0 0 16px;color:var(--texto-suave);font-size:14px;}
+.dia-nav{display:flex;gap:8px;margin-bottom:12px;}.dia-nav button{flex:1;padding:11px 6px;border:2px solid #e4e7e2;background:#fff;border-radius:14px;font-weight:700;font-size:13px;color:var(--verde-escuro2);cursor:pointer;}
+.abas{display:flex;background:#e9ece8;border-radius:14px;padding:4px;margin-bottom:12px;}
+.abas button{flex:1;padding:11px 6px;border:none;background:none;border-radius:11px;font-weight:700;font-size:13.5px;color:var(--texto-suave);cursor:pointer;font-family:inherit;}
+.abas button.ativa{background:#fff;color:var(--verde-escuro2);box-shadow:0 2px 8px rgba(20,40,20,.1);}
+.mesa.colocada{background:#d6e8fb;color:#0c4a8a;}
+.mesa.sel{outline:3px solid var(--verde);outline-offset:1px;}
+.l-col{background:#d6e8fb;}.l-sel{background:#fff;border:2px solid var(--verde);}
+.col-sel{font-weight:700;font-size:14px;color:var(--verde-escuro2);min-height:20px;}
+.linha-ordem{display:flex;gap:8px;}.linha-ordem input{flex:1;}
+.btn-cam{padding:0 16px;border:2px solid #e4e7e2;background:#fff;border-radius:14px;font-weight:700;font-size:13.5px;color:var(--verde-escuro2);cursor:pointer;font-family:inherit;}
+.dica{font-size:12px;color:var(--texto-suave);margin-top:5px;}.dica.erro{color:var(--bloq-tx);font-weight:700;}
+.seg{display:flex;gap:8px;}.seg button{flex:1;padding:13px 6px;border:2px solid #e4e7e2;background:#fff;border-radius:14px;font-weight:800;font-size:16px;color:var(--texto);cursor:pointer;font-family:inherit;}
+.seg button.ativa{background:var(--verde);border-color:var(--verde);color:#fff;}
+.intro{font-size:13px;color:var(--texto-suave);margin:0 0 12px;}
+.lista-lev{display:flex;flex-direction:column;gap:10px;}
+.cartao-lev{background:#fff;border-radius:16px;padding:13px 14px;box-shadow:0 2px 10px rgba(20,40,20,.06);cursor:pointer;border:2px solid transparent;}
+.cartao-lev.desativada{opacity:.55;cursor:default;}
+.cartao-lev.pendente{border-color:#cfe6c5;}
+.cartao-lev .topo{display:flex;align-items:center;gap:8px;font-weight:800;font-size:17px;}
+.cartao-lev .estado{margin-left:auto;font-size:11.5px;font-weight:800;padding:4px 9px;border-radius:9px;}
+.estado.aguardar{background:#eceeed;color:#6b756f;}.estado.fazer{background:#dff3d8;color:#1b6b1a;}.estado.feito{background:#e9ecea;color:#56605a;}
+.cartao-lev .meta{font-size:12px;color:var(--texto-suave);margin-top:4px;line-height:1.45;}
+.chip-mini{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:7px;background:var(--verde-claro);color:var(--verde-escuro2);}
+.chip-mini.sim{background:#fff1d6;color:#8a5200;}
+.bloco-rolhas{background:var(--cinza-bg);border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:13px;line-height:1.55;}
+.bloco-rolhas b{color:var(--texto);}
+.aviso-hand{background:#fff1d6;color:#7a4a00;border-radius:12px;padding:11px 12px;font-weight:700;font-size:13px;margin-bottom:12px;}
+.resumo-rolhas{background:var(--verde-claro);color:var(--verde-escuro2);border-radius:12px;padding:10px 12px;font-size:13px;font-weight:700;margin:-4px 0 14px;line-height:1.5;}
+.sheet-campo{margin-bottom:12px;}.sheet-campo label{display:block;font-size:12px;font-weight:800;color:var(--texto-suave);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+.sheet-campo input{width:100%;box-sizing:border-box;padding:14px;font-size:18px;font-weight:700;border:2px solid #e4e7e2;border-radius:14px;font-family:inherit;}
+.sheet-campo input:focus{outline:none;border-color:var(--verde);}
+.sheet-campo input:disabled{background:#f1f3f1;color:#9aa39d;}
+.soma-qv{font-weight:800;color:var(--verde-escuro2);font-size:14px;margin:-4px 0 12px;}
+.chips-vazio{color:var(--texto-suave);font-size:13px;}
+.sup-resumo{margin:16px 0 10px;font-size:13px;color:var(--texto-suave);line-height:1.5;}
+.sup-resumo b{color:var(--texto);}
+.op-card{background:#fff;border-radius:16px;padding:14px;margin-bottom:10px;box-shadow:0 2px 10px rgba(20,40,20,.05);}
+.op-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+.op-top b{font-size:15px;}
+.op-meta{font-size:12px;color:var(--texto-suave);margin:3px 0 10px;}
+.op-card input{width:100%;padding:11px 12px;font-size:16px;font-weight:700;border:2px solid #e4e7e2;border-radius:12px;text-transform:uppercase;}
+.op-card input.erro{border-color:var(--bloq-tx);}
+.op-aviso{color:var(--bloq-tx);font-size:12px;font-weight:700;margin-top:6px;}
+.aviso-geral{background:var(--bloq-bg);color:var(--bloq-tx);font-weight:700;font-size:13px;border-radius:12px;padding:10px 12px;margin-bottom:10px;}
+.msg-ok{background:var(--ok-bg);color:var(--ok-tx);font-weight:700;font-size:13.5px;border-radius:12px;padding:12px;margin-top:12px;}
+</style>
+</head>
+<body>
+<div id="app" class="modo-login">
+  <div id="loginTop">
+    <div class="login-bar">
+      <div class="logo-login"><img class="logo-img" src="logo.png" alt="Cork Supply" /></div>
+      <div class="login-right">
+        <button id="btnRefresh" aria-label="Atualizar lista">&#8635;</button>
+        <button class="voltar" id="btnVoltar" aria-label="Voltar" style="display:none;"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#2f7a16" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12H5"/><path d="M11.5 5.5 5 12l6.5 6.5"/></svg></button>
+        <img class="logo-ds100" src="ds100.png" alt="DS100" />
+      </div>
+    </div>
+    <div class="login-banner">
+      <div id="tituloHeader">Escolhe a área</div>
+      <div class="contador-pill" id="contadorMesasWrap" style="display:none;"><span class="dot"></span><span id="contadorMesas"></span></div>
+    </div>
+  </div>
+
+  <main>
+    <!-- TELA HOME -->
+    <section class="tela ativa" id="telaHome">
+      <div class="tile" id="tileProvadores">
+        <div class="tile-icon"><svg viewBox="0 0 64 64" fill="none" stroke="#46962b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="17" y="6" width="30" height="7" rx="2"/><path d="M19 13v4c-5 2-8 6-8 11v24a6 6 0 0 0 6 6h30a6 6 0 0 0 6-6V28c0-5-3-9-8-11v-4"/><path d="M11 25h42"/><rect x="18" y="36" width="9" height="12" rx="3"/><rect x="29" y="36" width="9" height="12" rx="3"/><rect x="40" y="36" width="9" height="12" rx="3"/><path d="M18 40h9M29 40h9M40 40h9"/></svg></div>
+        <div class="tile-txt"><b>Provadores</b><span>Abrir e concluir análises das mesas</span></div>
+        <span class="chevron">&#8250;</span>
+      </div>
+      <div class="tile" id="tileContadeira">
+        <div class="tile-icon"><svg viewBox="0 0 64 64" fill="none" stroke="#46962b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="8" width="40" height="48" rx="5"/><rect x="18" y="14" width="28" height="12" rx="2"/><circle cx="22" cy="36" r="2"/><circle cx="32" cy="36" r="2"/><circle cx="42" cy="36" r="2"/><circle cx="22" cy="46" r="2"/><circle cx="32" cy="46" r="2"/><circle cx="42" cy="46" r="2"/></svg></div>
+        <div class="tile-txt"><b>Contadeira</b><span>Valores contados pela máquina</span></div>
+        <span class="chevron">&#8250;</span>
+      </div>
+      <div class="tile" id="tileLogistica">
+        <div class="tile-icon"><svg viewBox="0 0 64 64" fill="none" stroke="#46962b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8v42"/><path d="M10 50h22"/><path d="M16 12v38"/><rect x="18" y="22" width="14" height="14" rx="1.5"/><path d="M18 29h14"/><path d="M36 50V30l6-10h6l4 14v16"/><path d="M36 50h20"/><circle cx="42" cy="52" r="4.5"/><circle cx="53" cy="52" r="4.5"/><path d="M40 20v10h12"/></svg></div>
+        <div class="tile-txt"><b>Logística</b><span>Mapa de mesas: MISU, logística e colocação</span></div>
+        <span class="chevron">&#8250;</span>
+      </div>
+    </section>
+
+    <!-- TELA CONTADEIRA -->
+    <section class="tela" id="telaContadeira">
+      <p class="intro">Mesas que vão à contadeira. Aponta o valor que a máquina contou.</p>
+      <div id="listaContadeira" class="lista-lev"></div>
+      <div class="msg-erro" id="erroContadeira"></div>
+    </section>
+
+    <!-- FOLHA (MISU / Contadeira / Logística) -->
+    <div id="modalSheet" class="modal" style="display:none;">
+      <div class="modal-box" id="sheetBox" style="max-height:92vh;overflow-y:auto;"></div>
+    </div>
+
+    <!-- TELA LOGÍSTICA -->
+    <section class="tela" id="telaLogistica">
+      <div class="abas">
+        <button id="abaColocar" class="ativa">Colocar · amanhã</button>
+        <button id="abaLevantar">Levantar · hoje</button>
+        <button id="abaEditar">Editar · supervisora</button>
+      </div>
+
+      <div id="editBar" class="card" style="display:none;margin-bottom:12px;">
+        <button class="secundario" id="btnColocarHoje" style="margin-top:0;">Colocar mesas de HOJE (teste)</button>
+        <button class="secundario" id="btnReset">Limpar todos os dados de teste</button>
+      </div>
+
+      <div id="logResumoLev" class="log-resumo">
+        <div class="log-kpi verm"><b id="kVerm">0</b><span>MISU</span></div>
+        <div class="log-kpi verde"><b id="kVerdes">0</b><span>logística</span></div>
+        <div class="log-kpi cinza"><b id="kLev">0</b><span>levantadas</span></div>
+      </div>
+      <div class="log-lado" id="logTopo">Lado <b id="logLado">-</b></div>
+      <div id="logMapa"></div>
+      <div class="log-legenda" id="legLev"><i class="l-verm"></i>MISU: contaminados <i class="l-verde"></i>Logística: rolhas OK <i class="l-prova"></i>Em prova <i class="l-lev"></i>Levantada <i class="l-vazia"></i>Sem lote</div>
+      <div class="log-legenda" id="legCol" style="display:none;"><i class="l-col"></i>Colocada <i class="l-sel"></i>Selecionada <i class="l-vazia"></i>Por colocar</div>
+      <div class="msg-erro" id="erroLog"></div>
+
+      <div class="card" id="colForm" style="display:none;margin-top:14px;">
+        <div class="campo">
+          <label>Mesas selecionadas</label>
+          <div id="colSel" class="col-sel">Toca nas mesas para selecionar</div>
+        </div>
+        <div class="campo">
+          <label>Nº de ordem</label>
+          <div class="linha-ordem">
+            <input type="text" style="text-transform:none" id="colOrdem" inputmode="numeric" maxlength="12" placeholder="Ex: 15007551" autocomplete="off" />
+            <button type="button" class="btn-cam" id="btnCam" aria-label="Ler com a câmara">Câmara</button>
+          </div>
+          <div class="dica" id="dicaOrdem">Tem de começar por 150, 151 ou 950</div>
+        </div>
+        <div class="campo">
+          <label>Tipo</label>
+          <div class="seg" id="segTipo"><button data-v="EUR">EUR</button><button data-v="GRUPO">GRUPO</button><button data-v="AMOSTRA">AMOSTRA</button></div>
+          <div class="dica">Amostra: 3 provadores</div>
+        </div>
+        <div class="campo">
+          <label>Quantidade de rolhas por frasco</label>
+          <div class="seg" id="segRolhas"><button data-v="1">1</button><button data-v="2">2</button><button data-v="4">4</button></div>
+        </div>
+        <div class="campo">
+          <label>Quantidade total frascos / cliente</label>
+          <input type="number" id="colTotal" inputmode="numeric" min="1" placeholder="Ex: 5000" />
+        </div>
+        <div class="campo">
+          <label>Contadeira</label>
+          <div class="seg" id="segContadeira"><button data-v="sim">Sim</button><button data-v="nao">Não</button></div>
+        </div>
+        <div class="campo">
+          <label>DSROL</label>
+          <div class="seg" id="segDsrol"><button data-v="sim">Sim</button><button data-v="nao">Não</button></div>
+        </div>
+        <div class="campo">
+          <label>QVs (nº de rolhas)</label>
+          <input type="number" id="colQvs" inputmode="numeric" min="0" placeholder="0" />
+        </div>
+        <div class="campo">
+          <label>Frascos partidos</label>
+          <input type="number" id="colPartidos" inputmode="numeric" min="0" placeholder="0" />
+        </div>
+        <div class="resumo-rolhas" id="colResumo">Escolhe as rolhas por frasco e indica os frascos para ver o total de rolhas.</div>
+        <button class="primario" id="btnGuardarCol">Guardar nas mesas selecionadas</button>
+        <button class="secundario" id="btnRemoverCol">Tirar das mesas selecionadas</button>
+        <div class="msg-erro" id="erroCol"></div>
+        <div class="msg-ok" id="okCol" style="display:none;"></div>
+      </div>
+    </section>
+
+    <!-- PALAVRA-PASSE DA SUPERVISORA -->
+    <div id="modalPin" class="modal" style="display:none;">
+      <div class="modal-box">
+        <h3>Palavra-passe da supervisora</h3>
+        <p>Para colocar e editar mesas.</p>
+        <input type="password" id="pinInput" inputmode="numeric" autocomplete="off" placeholder="Palavra-passe" style="width:100%;box-sizing:border-box;padding:14px 16px;font-size:20px;letter-spacing:4px;border:2px solid #e4e7e2;border-radius:14px;margin-bottom:10px;font-family:inherit;" />
+        <div class="msg-erro" id="pinErro"></div>
+        <button class="primario" id="pinOk">Entrar</button>
+        <button class="secundario" id="pinCancel">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- CÂMARA: ler nº de ordem -->
+    <div id="modalCam" class="modal" style="display:none;">
+      <div class="modal-box">
+        <h3>Ler nº de ordem</h3>
+        <video id="camVideo" playsinline muted style="width:100%;border-radius:14px;background:#000;max-height:46vh;"></video>
+        <p id="camMsg">Aponta a câmara ao código de barras ou QR da OP.</p>
+        <button class="secundario" id="camFechar">Fechar</button>
+      </div>
+    </div>
+
+
+
+    <!-- TELA LOGIN -->
+    <section class="tela" id="telaLogin">
+      <input type="search" id="buscaAprovador" class="busca" placeholder="Procurar nome..." autocomplete="off" />
+      <ul class="lista-aprovadores" id="listaAprovadores"></ul>
+    </section>
+
+    <!-- TELA SCANNER -->
+    <section class="tela" id="telaScanner">
+      <div class="card">
+        <div class="campo">
+          <label>Mesa ou lote</label>
+          <div class="input-wrap">
+            <input type="text" id="inputMesa" placeholder="Ex: A12" autocapitalize="characters" />
+          </div>
+        </div>
+        <button class="primario" id="btnVerificar">Verificar mesa</button>
+        <div class="msg-erro" id="erroScanner"></div>
+      </div>
+    </section>
+
+    <!-- TELA CHECK -->
+    <section class="tela" id="telaCheck">
+      <div id="estadoCard" class="estado-pill"></div>
+      <div class="card">
+        <div class="linha"><span>Mesa</span><b id="checkMesa">-</b></div>
+        <div class="linha"><span>OP / Lote</span><b id="checkOP">-</b></div>
+        <div class="linha"><span>Provadores</span><b id="checkProvadores">-</b></div>
+        <div class="linha"><span>Frascos partidos</span><b id="checkPartidos">-</b></div>
+      </div>
+      <button class="primario" id="btnAbrir" style="margin-top:16px;">Abrir mesa</button>
+      <button class="secundario" id="btnOutraMesa">Analisar outra mesa</button>
+      <div class="msg-erro" id="erroCheck"></div>
+    </section>
+
+    <!-- TELA OPEN -->
+    <section class="tela" id="telaOpen">
+      <div class="card open-hero">
+        <div class="selo">✅</div>
+        <h2>Mesa <span id="openMesa">-</span></h2>
+        <p>Registo aberto às <span id="openHora">-</span></p>
+        <p style="margin-top:6px;">Frascos partidos: <b id="openPartidos">-</b></p>
+      </div>
+      <button class="primario" id="btnConcluir" style="margin-top:20px;">Concluir análise</button>
+      <div class="msg-erro" id="erroOpen"></div>
+    </section>
+  </main>
+</div>
+
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>

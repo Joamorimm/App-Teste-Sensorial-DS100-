@@ -1,0 +1,620 @@
+const test = require('node:test');
+const assert = require('node:assert');
+const XLSX = require('xlsx');
+const { api, limpar, lote, fechadoHa, hoje, proximoUtil, plan, pool } = require('./helpers');
+
+test.beforeEach(limpar);
+test.after(() => pool.end());
+
+test('saúde e lista de aprovadores (9 seed)', async () => {
+  assert.strictEqual((await api('GET', '/api/saude')).status, 200);
+  const r = await api('GET', '/api/aprovadores');
+  assert.strictEqual(r.body.length, 9);
+  assert.ok(r.body.some((a) => a.nome === 'Tânia Gonçalves'));
+});
+
+test('mesa sem lote hoje abre de imediato (não planeada)', async () => {
+  const e = (await api('GET', '/api/mesa/Z99?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.planeado, false);
+  assert.strictEqual(e.podeAbrir, true);
+});
+
+test('abrir + concluir: ciclo normal e contador de mesas feitas', async () => {
+  await lote('A1');
+  const ab = await api('POST', '/api/mesa/a1/abrir', { aprovador: 'Marta Santos' });
+  assert.strictEqual(ab.status, 200);
+  const id = ab.body.registo.id;
+  assert.strictEqual((await api('GET', '/api/mesa/A1?aprovador=Marta Santos')).body.mesaAbertaPorMim, true);
+  assert.strictEqual((await api('POST', `/api/registo/${id}/concluir`)).status, 200);
+  assert.strictEqual((await api('GET', '/api/aprovador/Marta Santos/mesas-hoje')).body.mesas, 1);
+});
+
+test('mesa em uso por outro provador não abre', async () => {
+  await lote('A1');
+  await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Marta Santos' });
+  const r = await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Tânia Lino' });
+  assert.strictEqual(r.status, 409);
+  const e = (await api('GET', '/api/mesa/A1?aprovador=Tânia Lino')).body;
+  assert.strictEqual(e.mesaAbertaPorOutro, true);
+  assert.strictEqual(e.quemTemMesa, 'Marta Santos');
+});
+
+test('regra dos 30 min: bloqueia aos 10 min e liberta aos 31 min', async () => {
+  await lote('A1');
+  await fechadoHa('A1', 'Marta Santos', 10);
+  let e = (await api('GET', '/api/mesa/A1?aprovador=Tânia Lino')).body;
+  assert.strictEqual(e.podeAbrir, false);
+  assert.ok(e.minutosRestantes > 0 && e.minutosRestantes <= 20);
+  assert.strictEqual((await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Tânia Lino' })).status, 409);
+  await limpar();
+  await lote('A1');
+  await fechadoHa('A1', 'Marta Santos', 31);
+  e = (await api('GET', '/api/mesa/A1?aprovador=Tânia Lino')).body;
+  assert.strictEqual(e.podeAbrir, true);
+});
+
+test('o mesmo provador não repete a mesma mesa no mesmo dia', async () => {
+  await lote('A1', 3);
+  await fechadoHa('A1', 'Marta Santos', 90);
+  const e = (await api('GET', '/api/mesa/A1?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.jaFezHoje, true);
+  assert.strictEqual(e.podeAbrir, false);
+});
+
+test('lote completo (2 de 2) bloqueia novas aberturas', async () => {
+  await lote('A1', 2);
+  await fechadoHa('A1', 'Marta Santos', 120);
+  await fechadoHa('A1', 'Tânia Lino', 60);
+  const e = (await api('GET', '/api/mesa/A1?aprovador=Teresa Pinto')).body;
+  assert.strictEqual(e.loteCompleto, true);
+  assert.strictEqual(e.podeAbrir, false);
+});
+
+test('um provador só pode ter uma mesa aberta de cada vez', async () => {
+  await lote('A1');
+  await lote('A2');
+  await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Marta Santos' });
+  const e = (await api('GET', '/api/mesa/A2?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.outraMesaAberta, true);
+  assert.strictEqual(e.outraMesaCodigo, 'A1');
+  assert.strictEqual((await api('POST', '/api/mesa/A2/abrir', { aprovador: 'Marta Santos' })).status, 409);
+});
+
+test('concorrência: 4 provadores a abrir a mesma mesa em simultâneo, só um ganha', async () => {
+  await lote('A1');
+  const nomes = ['Marta Santos', 'Tânia Lino', 'Teresa Pinto', 'Raquel Santos'];
+  const rs = await Promise.all(nomes.map((a) => api('POST', '/api/mesa/A1/abrir', { aprovador: a })));
+  assert.strictEqual(rs.filter((r) => r.status === 200).length, 1);
+  assert.strictEqual((await pool.query("SELECT 1 FROM registos WHERE mesa='A1' AND estado='Aberto'")).rowCount, 1);
+});
+
+test('concluir duas vezes (duplo toque) não cria dados inconsistentes', async () => {
+  await lote('A1');
+  const id = (await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Marta Santos' })).body.registo.id;
+  const [a, b] = await Promise.all([api('POST', `/api/registo/${id}/concluir`), api('POST', `/api/registo/${id}/concluir`)]);
+  assert.ok([a.status, b.status].includes(200));
+  assert.strictEqual((await pool.query("SELECT 1 FROM registos WHERE estado='Fechado'")).rowCount, 1);
+  assert.strictEqual((await pool.query("SELECT 1 FROM registos WHERE estado='Aberto'")).rowCount, 0);
+});
+
+test('validação de pedidos: falta de campos', async () => {
+  assert.strictEqual((await api('GET', '/api/mesa/A1')).status, 400);
+  assert.strictEqual((await api('POST', '/api/mesa/A1/abrir', {})).status, 400);
+  assert.strictEqual((await api('POST', '/api/lotes', {})).status, 400);
+});
+
+test('lado oposto bloqueado: se hoje é B, mesas A não abrem (planeadas ou não)', async () => {
+  await lote('B1');
+  await lote('B2');
+  const e = (await api('GET', '/api/mesa/A5?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.ladoHoje, 'B');
+  assert.strictEqual(e.ladoErrado, true);
+  assert.strictEqual(e.podeAbrir, false);
+  assert.strictEqual((await api('POST', '/api/mesa/A5/abrir', { aprovador: 'Marta Santos' })).status, 409);
+  assert.strictEqual((await api('GET', '/api/mesa/B7?aprovador=Marta Santos')).body.podeAbrir, true); // B não planeada abre
+  assert.strictEqual((await api('POST', '/api/mesa/B1/abrir', { aprovador: 'Marta Santos' })).status, 200);
+});
+
+test('lado oposto: se hoje é A, mesas B bloqueadas', async () => {
+  await lote('A1');
+  const e = (await api('GET', '/api/mesa/B3?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.ladoHoje, 'A');
+  assert.strictEqual(e.podeAbrir, false);
+});
+
+test('sem lotes hoje, o lado vem do calendário (alternância)', async () => {
+  const esperado = plan.ladoDoDia(hoje());
+  const e = (await api('GET', '/api/mesa/A1?aprovador=Marta Santos')).body;
+  assert.strictEqual(e.ladoHoje, esperado);
+});
+
+// ---- Supervisão / planeamento ----
+function xlsxBuf(linhas) {
+  const ws = XLSX.utils.aoa_to_sheet([['OP', 'Alias', 'Produto', 'Provadores', 'Estado', 'Frascos', 'Dia', 'Dia útil'], ...linhas]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'DS100');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+test('proposta via API: gera e rejeita data inválida, fim de semana, ficheiro vazio ou errado', async () => {
+  const dia = proximoUtil();
+  const [y, m, d] = hoje().split('-');
+  const buf = xlsxBuf([['1', '', '', 2, 'Liberada', 500, `${d}/${m}/${y}`, '1ªF (500f)']]);
+  assert.strictEqual((await api('POST', `/api/planeamento/proposta?data=${dia}`, buf, true)).status, 200);
+  assert.strictEqual((await api('POST', '/api/planeamento/proposta?data=lixo', buf, true)).status, 400);
+  assert.strictEqual((await api('POST', '/api/planeamento/proposta?data=2026-10-24', buf, true)).status, 400);
+  assert.strictEqual((await api('POST', `/api/planeamento/proposta?data=${dia}`, Buffer.alloc(0), true)).status, 400);
+  assert.strictEqual((await api('POST', `/api/planeamento/proposta?data=${dia}`, Buffer.from('isto não é excel'), true)).status, 400);
+});
+
+test('confirmar: grava, substitui o dia e os lotes aparecem na lista', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  let r = await api('POST', '/api/planeamento/confirmar', { dataProva: dia, itens: [{ op: '111', provadores: 2, intervalo: `${L}1-${L}3` }] });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.mesas, 3);
+  r = await api('POST', '/api/planeamento/confirmar', { dataProva: dia, itens: [{ op: '222', provadores: 3, intervalo: `${L}5` }] });
+  const lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.deepStrictEqual(lst.map((x) => x.mesa), [`${L}5`]);
+  assert.strictEqual(lst[0].numero_provadores, 3);
+});
+
+test('confirmar: recusa passado, fim de semana, lado errado, duplicada, inválido, pedido mal formado', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const O = L === 'A' ? 'B' : 'A';
+  const c = (b) => api('POST', '/api/planeamento/confirmar', b);
+  assert.strictEqual((await c({ dataProva: '2020-01-01', itens: [] })).status, 400);
+  assert.strictEqual((await c({ dataProva: '2026-10-24', itens: [] })).status, 400);
+  assert.strictEqual((await c({ dataProva: dia, itens: [{ op: '1', provadores: 2, intervalo: `${O}1` }] })).status, 400);
+  assert.strictEqual((await c({ dataProva: dia, itens: [{ op: '1', provadores: 2, intervalo: `${L}1-${L}3` }, { op: '1', provadores: 2, intervalo: `${L}3` }] })).status, 400);
+  assert.strictEqual((await c({ dataProva: dia, itens: [{ op: '1', provadores: 2, intervalo: 'abc' }] })).status, 400);
+  assert.strictEqual((await c({ dataProva: dia, itens: [{ op: '1', provadores: 2, intervalo: `${L}99` }] })).status, 400);
+  assert.strictEqual((await c({ dataProva: 'x', itens: 'y' })).status, 400);
+});
+
+test('confirmar: pedido inválido não apaga o que já estava gravado', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  await api('POST', '/api/planeamento/confirmar', { dataProva: dia, itens: [{ op: '1', provadores: 2, intervalo: `${L}1-${L}2` }] });
+  await api('POST', '/api/planeamento/confirmar', { dataProva: dia, itens: [{ op: '9', provadores: 2, intervalo: `${L}99` }] });
+  assert.strictEqual((await api('GET', `/api/lotes?data=${dia}`)).body.length, 2);
+});
+
+test('confirmar: mesa partilhada por duas OPs grava um lote com as duas OPs', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const r = await api('POST', '/api/planeamento/confirmar', { dataProva: dia, itens: [
+    { op: '111', provadores: 2, intervalo: `${L}1-${L}2` }, { op: '222', provadores: 3, intervalo: `${L}2-${L}3` }] });
+  assert.strictEqual(r.status, 200);
+  const lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.strictEqual(lst.length, 3);
+  const m2 = lst.find((x) => x.mesa === `${L}2`);
+  assert.strictEqual(m2.ordem, '111 + 222');
+  assert.strictEqual(m2.numero_provadores, 3);
+});
+
+test('registo guarda as OPs da mesa inteira (mesa partilhada) para ficar conforme', async () => {
+  await lote('A1', 2, '111 + 222');
+  const ab = await api('POST', '/api/mesa/A1/abrir', { aprovador: 'Marta Santos' });
+  assert.strictEqual(ab.body.registo.ordem, '111 + 222');
+  const r = await pool.query("SELECT ordem FROM registos WHERE mesa='A1'");
+  assert.strictEqual(r.rows[0].ordem, '111 + 222');
+});
+
+// ---- Levantamento: MISU / Contadeira / Logística ----
+async function loteCompleto(mesa, cont, extra = {}) {
+  await lote(mesa, 1, extra.o || 'OP1');
+  await pool.query(`UPDATE lotes SET rolhas_por_frasco = $2, total_frascos_cliente = $3, contadeira = $4, qvs_colocacao = $5, frascos_partidos = $6, tipo = 'EUR', dsrol = false
+     WHERE mesa = $1 AND data_planeamento = $7`, [mesa, extra.r ?? 2, extra.f ?? 5000, cont, extra.q ?? 10, extra.p ?? 3, hoje()]);
+  await fechadoHa(mesa, 'Marta Santos', 60);
+}
+const lev = async (mesa) => (await api('GET', '/api/levantamento')).body.mesas.find((m) => m.mesa === mesa);
+
+test('levantamento: total de rolhas = frascos x rolhas por frasco; frascos partidos visíveis', async () => {
+  await loteCompleto('A1', false);
+  const m = await lev('A1');
+  assert.strictEqual(m.totalRolhas, 10000);
+  assert.strictEqual(m.rolhasPartidas, 6);
+  assert.strictEqual(m.frascosPartidos, 3);
+  assert.strictEqual(m.estadoProva, 'pronta');
+});
+
+test('MISU sem contadeira: aponta ligeiras e fortes e a logística fica com total - contaminados', async () => {
+  await loteCompleto('A1', false);
+  const r = await api('POST', '/api/misu/A1', { ligeiros: 100, fortes: 50, qvs: 5 });
+  assert.strictEqual(r.status, 200);
+  const m = await lev('A1');
+  assert.strictEqual(m.contaminados, 150);
+  assert.strictEqual(m.aprovadas, 9844);
+  assert.strictEqual(m.aprovadasOrigem, 'subtracao');
+  assert.strictEqual(m.misuEstado, 'feito');
+});
+
+test('MISU: valida números, exige ligeiras e fortes, e não deixa passar do total da mesa', async () => {
+  await loteCompleto('A1', false);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 10 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: -1, fortes: 0 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 1.5, fortes: 0 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 9000, fortes: 2000 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 0, fortes: 0 })).status, 200);
+  assert.strictEqual((await lev('A1')).aprovadas, 9994);
+});
+
+test('MISU: mesa que ainda não está concluída pelos provadores ou sem lote é recusada', async () => {
+  await lote('A1', 2);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1 })).status, 409);
+  assert.strictEqual((await api('POST', '/api/misu/A9', { ligeiros: 1, fortes: 1 })).status, 404);
+});
+
+test('MISU com contadeira: só conta aromas fortes (ligeiros ficam para a contadeira) e tem de os apontar ANTES de entregar à contadeira', async () => {
+  await loteCompleto('A1', true);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { qvs: 4 })).status, 400);                 // só QVs: não pode entregar
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 5, qvs: 4 })).status, 400);    // falta o forte (ligeiros não contam)
+  let m = await lev('A1');
+  assert.strictEqual(m.misuEstado, 'pendente');
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 5, fortes: 3, qvs: 4 })).status, 200);   // ligeiros ignorados
+  m = await lev('A1');
+  assert.strictEqual(m.misuEstado, 'entregue');
+  assert.strictEqual(m.contaminados, 3);
+  assert.strictEqual(m.ligeiros, 0);
+  assert.strictEqual(m.qvs.misu, 4);
+  assert.strictEqual(m.aprovadas, null);              // as aprovadas vêm da contadeira, por OP
+  assert.strictEqual(m.contadeiraPendente, true);
+});
+
+test('cut off de responsabilidade: depois de entregar à contadeira o MISU já não mexe na mesa', async () => {
+  await loteCompleto('A1', true);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1, qvs: 2 })).status, 200);   // entrega
+  const r = await api('POST', '/api/misu/A1', { ligeiros: 2, fortes: 2, qvs: 9 });
+  assert.strictEqual(r.status, 409);
+  assert.match(r.body.erro, /contadeira/);
+  const m = await lev('A1');
+  assert.strictEqual(m.qvs.misu, 2);
+  assert.strictEqual(m.contaminados, 1);   // não mudou
+});
+
+test('sem contadeira o MISU aponta à mão e pode corrigir; a contadeira não entra', async () => {
+  await loteCompleto('A1', false);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 5, fortes: 5 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 6, fortes: 5 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/OP1', { aprovadas: 1 })).status, 404);   // a contadeira não entra
+  assert.strictEqual((await lev('A1')).contaminados, 11);
+});
+
+test('contadeira trabalha à OP (não à mesa): só entra depois de o MISU entregar TODAS as mesas da OP', async () => {
+  await loteCompleto('A1', true, { o: '15007551' });
+  await loteCompleto('A2', true, { o: '15007551' });
+  await loteCompleto('A3', false, { o: '15102461' });
+  const c = (op, b) => api('POST', `/api/contadeira/op/${op}`, b);
+  assert.strictEqual((await c('15007551', { aprovadas: 100 })).status, 409);       // MISU ainda não entregou
+  await api('POST', '/api/misu/A1', { ligeiros: 400, fortes: 100, qvs: 1 });
+  assert.strictEqual((await c('15007551', { aprovadas: 100 })).status, 409);       // falta a A2
+  await api('POST', '/api/misu/A2', { ligeiros: 300, fortes: 200, qvs: 1 });
+  assert.strictEqual((await c('15007551', { aprovadas: 18000 })).status, 200);
+  assert.strictEqual((await c('15102461', { aprovadas: 1 })).status, 404);          // OP sem contadeira
+  assert.strictEqual((await c('99999999', { aprovadas: 1 })).status, 404);
+  const j = (await api('GET', '/api/levantamento')).body;
+  const o = j.ops.find((x) => x.op === '15007551');
+  assert.strictEqual(o.nMesas, 2);
+  assert.deepStrictEqual(o.mesas, ['A1', 'A2']);
+  assert.strictEqual(o.totalRolhas, 20000);
+  assert.strictEqual(o.aprovadas, 18000);
+  assert.strictEqual(o.contaminados, 300);
+  assert.strictEqual(o.estado, 'feito');
+  assert.strictEqual(j.ops.length, 1);                                               // só OPs com mesas que vão à contadeira
+  const a1 = j.mesas.find((m) => m.mesa === 'A1');
+  assert.strictEqual(a1.contagensOp[0].aprovadas, 18000);
+  assert.strictEqual(a1.contadeiraPendente, false);
+});
+
+test('contadeira por OP: valida valores e o total da OP; atualização parcial mantém o resto', async () => {
+  await loteCompleto('A1', true, { o: '15007551' });
+  await api('POST', '/api/misu/A1', { ligeiros: 700, fortes: 300, qvs: 0 });
+  const c = (b) => api('POST', '/api/contadeira/op/15007551', b);
+  assert.strictEqual((await c({})).status, 400);
+  assert.strictEqual((await c({ aprovadas: -1 })).status, 400);
+  assert.strictEqual((await c({ aprovadas: 1.5 })).status, 400);
+  assert.strictEqual((await c({ aprovadas: 10001 })).status, 400);                  // total da OP = 10000
+  assert.strictEqual((await c({ aprovadas: 9695 })).status, 400);                   // 9695 + 300 fortes + 6 partidas > 10000
+  assert.strictEqual((await c({ aprovadas: 9694 })).status, 200);
+  const o = (await api('GET', '/api/levantamento')).body.ops[0];
+  assert.strictEqual(o.aprovadas, 9694);
+  assert.strictEqual(o.contaminados, 300);   // só fortes, vêm do MISU
+});
+
+test('contadeira por OP: uma OP em várias mesas, e uma mesa partilhada entra nas duas OPs', async () => {
+  await loteCompleto('A1', true, { o: '111111' });
+  await loteCompleto('A2', true, { o: '111111 + 222222' });
+  await loteCompleto('A3', true, { o: '222222' });
+  const j = (await api('GET', '/api/levantamento')).body;
+  const o1 = j.ops.find((x) => x.op === '111111'), o2 = j.ops.find((x) => x.op === '222222');
+  assert.deepStrictEqual(o1.mesas, ['A1', 'A2']);
+  assert.deepStrictEqual(o2.mesas, ['A2', 'A3']);
+  assert.strictEqual(o1.partilhada, true);
+  for (const m of ['A1', 'A2', 'A3']) await api('POST', `/api/misu/${m}`, { ligeiros: 0, fortes: 0, qvs: 0 });
+  assert.strictEqual((await api('POST', '/api/contadeira/op/111111', { aprovadas: 15000 })).status, 200);   // sem teto em OPs com mesa partilhada
+  assert.strictEqual((await api('POST', '/api/contadeira/op/222222', { aprovadas: 100 })).status, 200);
+});
+
+test('contadeira por OP: espera pelas provas', async () => {
+  await lote('A1', 2, '15007551');
+  await pool.query(`UPDATE lotes SET contadeira = true WHERE mesa = 'A1'`);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007551', { aprovadas: 1 })).status, 409);
+});
+
+test('QVs: soma colocação (ecrã 1) + MISU + logística', async () => {
+  await loteCompleto('A1', false, { q: 10 });
+  await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1, qvs: 5 });
+  let m = await lev('A1');
+  assert.deepStrictEqual(m.qvs, { colocacao: 10, misu: 5, logistica: 0, total: 15 });
+  assert.strictEqual((await api('POST', '/api/logistica/qvs/A1', { qvs: 2 })).status, 200);
+  m = await lev('A1');
+  assert.deepStrictEqual(m.qvs, { colocacao: 10, misu: 5, logistica: 2, total: 17 });
+  assert.strictEqual((await api('POST', '/api/logistica/qvs/A1', { qvs: -3 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/qvs/A1', {})).status, 400);
+});
+
+test('mapa vermelho/verde: vermelho = vez do MISU, verde = vez da logística (contaminados à frente)', async () => {
+  const L = (await api('GET', '/api/logistica/mesas')).body.lado;
+  await loteCompleto(`${L}1`, false);
+  await loteCompleto(`${L}2`, true);
+  await lote(`${L}3`, 2);                                   // ainda em provas
+  const est = async (n) => (await api('GET', '/api/logistica/mesas')).body.mesas.find((m) => m.mesa === `${L}${n}`).estado;
+  assert.strictEqual(await est(1), 'misu');
+  assert.strictEqual(await est(2), 'misu');
+  assert.strictEqual(await est(3), 'em_prova');
+  await api('POST', `/api/misu/${L}1`, { ligeiros: 1, fortes: 1 });
+  await api('POST', `/api/misu/${L}2`, { ligeiros: 1, fortes: 1 });   // entrega à contadeira
+  assert.strictEqual(await est(1), 'pronta');
+  assert.strictEqual(await est(2), 'pronta');
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${L}1` })).status, 200);
+  assert.strictEqual(await est(1), 'levantada');
+  const j = (await api('GET', '/api/levantamento')).body.mesas;
+  assert.strictEqual(j.find((m) => m.mesa === `${L}1`).fase, 'levantada');
+  assert.strictEqual(j.find((m) => m.mesa === `${L}2`).fase, 'logistica');
+  assert.strictEqual(j.find((m) => m.mesa === `${L}3`).fase, 'em_prova');
+});
+
+test('MISU trabalha à mesa, não à OP: mesa partilhada por várias OPs funciona como uma só mesa', async () => {
+  await loteCompleto('A1', false);
+  await pool.query(`UPDATE lotes SET ordem = '15102461 + 15007567' WHERE mesa = 'A1' AND data_planeamento = $1`, [hoje()]);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 10, fortes: 5 })).status, 200);
+  assert.strictEqual((await lev('A1')).aprovadas, 9979);
+});
+
+test('MISU só vê as mesas do dia da prova: lote de outro dia não conta (as mesas fecham no próprio dia)', async () => {
+  await lote('A1', 1);
+  await pool.query(`UPDATE lotes SET data_planeamento = data_planeamento - 1 WHERE mesa = 'A1'`);
+  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1 })).status, 404);
+  assert.strictEqual((await api('GET', '/api/levantamento')).body.mesas.length, 0);
+});
+
+test('rolhas por frasco 1 / 2 / 4 multiplicam os frascos', async () => {
+  for (const r of [1, 2, 4]) {
+    await limpar();
+    await loteCompleto('A1', false, { r, f: 1000, p: 10 });
+    const m = await lev('A1');
+    assert.strictEqual(m.totalRolhas, 1000 * r);
+    assert.strictEqual(m.rolhasPartidas, 10 * r);
+  }
+});
+
+test('provadores veem os frascos partidos da mesa', async () => {
+  await loteCompleto('A1', false, { r: 4, p: 5 });
+  const e = (await api('GET', '/api/mesa/A1?aprovador=Tânia Lino')).body;
+  assert.strictEqual(e.frascosPartidos, 5);
+  assert.strictEqual(e.rolhasPartidas, 20);
+});
+
+// ---- Logística: colocar mesas ----
+const corpo = (dia, L, extra = {}) => ({ data: dia, mesas: [`${L}1`, `${L}2`], ordem: '15007551', rolhasPorFrasco: 2, totalFrascosCliente: 5000, contadeira: true, qvs: 7, tipo: 'EUR', dsrol: false, frascosPartidos: 3, ...extra });
+
+test('colocar: grava a OP e os campos nas mesas e aparecem no mapa de amanhã', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const r = await api('POST', '/api/logistica/colocar', corpo(dia, L));
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.mesas, 2);
+  const j = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body;
+  const m = j.mesas.find((x) => x.mesa === `${L}1`);
+  assert.strictEqual(m.estado, 'colocada');
+  assert.strictEqual(m.ordem, '15007551');
+  assert.strictEqual(m.rolhasPorFrasco, 2);
+  assert.strictEqual(m.totalFrascosCliente, 5000);
+  assert.strictEqual(m.contadeira, true);
+  assert.strictEqual(m.qvs, 7);
+  assert.strictEqual(m.totalRolhas, 10000);
+  assert.strictEqual(m.rolhasPartidas, 6);
+  assert.strictEqual(m.tipo, 'EUR');
+  assert.strictEqual(m.dsrol, false);
+  assert.strictEqual(m.frascosPartidos, 3);
+  assert.strictEqual(j.mesas.find((x) => x.mesa === `${L}3`).estado, 'sem_lote');
+});
+
+test('colocar: a data da prova é sempre o dia útil seguinte à logística (n+1)', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L))).status, 200);
+  const depois = plan.diaUtilSeguinte(dia);
+  const r = await api('POST', '/api/logistica/colocar', corpo(depois, plan.ladoDoDia(depois), { mesas: [`${plan.ladoDoDia(depois)}1`] }));
+  assert.strictEqual(r.status, 400);
+  assert.match(r.body.erro, /dia útil seguinte/);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(hoje(), plan.ladoDoDia(hoje())))).status, 401);
+});
+
+test('colocar: nº de ordem tem de começar por 150, 151 ou 950', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  for (const bom of ['15007551', '15102461', '95012345']) {
+    assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { ordem: bom }))).status, 200, bom);
+  }
+  for (const mau of ['14007551', '12345678', '15', 'abc', '150-123', '', '250123456']) {
+    assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { ordem: mau }))).status, 400, mau);
+  }
+});
+
+test('colocar: rolhas por frasco só 1, 2 ou 4', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  for (const ok of [1, 2, 4]) assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { rolhasPorFrasco: ok }))).status, 200);
+  for (const mau of [0, 3, 5, 8, null, 'x']) assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { rolhasPorFrasco: mau }))).status, 400, String(mau));
+});
+
+test('colocar: valida total de frascos, contadeira, mesas, lado, data', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const O = L === 'A' ? 'B' : 'A';
+  const c = (extra) => api('POST', '/api/logistica/colocar', corpo(dia, L, extra));
+  assert.strictEqual((await c({ totalFrascosCliente: 0 })).status, 400);
+  assert.strictEqual((await c({ totalFrascosCliente: 'x' })).status, 400);
+  assert.strictEqual((await c({ contadeira: 'sim' })).status, 400);
+  assert.strictEqual((await c({ contadeira: false })).status, 200);
+  assert.strictEqual((await c({ mesas: [] })).status, 400);
+  assert.strictEqual((await c({ mesas: [`${O}1`] })).status, 400);       // lado errado
+  assert.strictEqual((await c({ mesas: [`${L}99`] })).status, 400);       // mesa inexistente
+  assert.strictEqual((await c({ data: '2020-01-01' })).status, 400);       // passado
+  assert.strictEqual((await c({ data: '2026-10-24' })).status, 400);       // fim de semana
+  assert.strictEqual((await c({ qvs: '' })).status, 200);                  // QVs opcional
+  assert.strictEqual((await c({ qvs: -1 })).status, 400);
+  assert.strictEqual((await c({ qvs: 'abc' })).status, 400);
+});
+
+test('colocar: tipo EUR/GRUPO/AMOSTRA; amostra = 3 provadores; DSROL e frascos partidos', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  for (const t of ['EUR', 'GRUPO']) assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { tipo: t }))).status, 200);
+  let lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.strictEqual(lst[0].numero_provadores, 2);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { tipo: 'AMOSTRA' }))).status, 200);
+  lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.strictEqual(lst[0].numero_provadores, 3);
+  for (const mau of ['', 'eur', 'OUTRO', null]) assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { tipo: mau }))).status, 400, String(mau));
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { dsrol: 'sim' }))).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { dsrol: true }))).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { frascosPartidos: -1 }))).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { frascosPartidos: 2.5 }))).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { frascosPartidos: '' }))).status, 200); // vazio = 0
+  const m = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas.find((x) => x.mesa === `${L}1`);
+  assert.strictEqual(m.frascosPartidos, 0);
+});
+
+test('colocar amanhã não pede palavra-passe; mexer em hoje só com a da supervisora', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L))).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(dia, L, { pin: '0000' }))).status, 401);
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(hoje, Lh))).status, 401);
+  assert.strictEqual((await api('POST', '/api/logistica/remover', { data: hoje, mesas: [`${Lh}1`] })).status, 401);
+  assert.strictEqual((await api('POST', '/api/supervisora/mesa/' + Lh + '1', { ligeiros: 1 })).status, 401);
+  assert.strictEqual((await api('POST', '/api/supervisora/mesa/' + Lh + '1', { pin: '0000' })).status, 401);
+  await api('POST', '/api/logistica/remover', { data: dia, mesas: [`${L}1`, `${L}2`] });
+});
+
+test('supervisora: com a palavra-passe corrige uma mesa de hoje; ligeiras+fortes não passam o total', async () => {
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  assert.strictEqual((await api('POST', '/api/logistica/colocar', corpo(hoje, Lh, { mesas: [`${Lh}3`], pin: '8126' }))).status, 200);
+  const r = await api('POST', `/api/supervisora/mesa/${Lh}3`, { pin: '8126', misu: { ligeiros: 5, fortes: 2, qvs: 1 }, frascosPartidos: 4 });
+  assert.strictEqual(r.status, 200);
+  const x = (await api('GET', '/api/levantamento')).body.mesas.find((m) => m.mesa === `${Lh}3`);
+  assert.strictEqual(x.ligeiros, 5); assert.strictEqual(x.fortes, 2); assert.strictEqual(x.frascosPartidos, 4);
+  assert.strictEqual((await api('POST', `/api/supervisora/mesa/${Lh}3`, { pin: '8126', misu: { ligeiros: 99999999 } })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/remover', { data: hoje, mesas: [`${Lh}3`], pin: '8126' })).status, 200);
+});
+
+test('colocar: voltar a guardar a mesma mesa atualiza; remover tira a mesa', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  await api('POST', '/api/logistica/colocar', corpo(dia, L));
+  await api('POST', '/api/logistica/colocar', corpo(dia, L, { ordem: '15102461', mesas: [`${L}1`] }));
+  let lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.strictEqual(lst.find((x) => x.mesa === `${L}1`).ordem, '15102461');
+  assert.strictEqual(lst.length, 2);
+  assert.strictEqual((await api('POST', '/api/logistica/remover', { data: dia, mesas: [`${L}1`] })).status, 200);
+  lst = (await api('GET', `/api/lotes?data=${dia}`)).body;
+  assert.deepStrictEqual(lst.map((x) => x.mesa), [`${L}2`]);
+});
+
+test('colocar: mesas colocadas para amanhã não afetam hoje', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  await api('POST', '/api/logistica/colocar', corpo(dia, L));
+  assert.strictEqual((await api('GET', `/api/lotes?data=${hoje()}`)).body.length, 0);
+});
+
+// ---- Logística ----
+test('logística: estados vermelho / verde / sem lote e contagens', async () => {
+  const L = (await api('GET', '/api/logistica/mesas')).body.lado;
+  await lote(`${L}1`, 2);
+  await lote(`${L}2`, 2);
+  await lote(`${L}3`, 1);
+  await fechadoHa(`${L}1`, 'Marta Santos', 90);
+  await fechadoHa(`${L}1`, 'Tânia Lino', 60);
+  await fechadoHa(`${L}2`, 'Marta Santos', 60);
+  await api('POST', `/api/mesa/${L}3/abrir`, { aprovador: 'Teresa Pinto' });
+  const j = (await api('GET', '/api/logistica/mesas')).body;
+  const e = (n) => j.mesas.find((m) => m.mesa === `${L}${n}`);
+  assert.strictEqual(e(1).estado, 'misu');           // provas concluídas: vez do MISU (vermelho)
+  assert.strictEqual(e(2).estado, 'em_prova');
+  assert.strictEqual(e(2).feitos, 1);
+  assert.strictEqual(e(3).estado, 'em_prova');
+  assert.strictEqual(e(3).emAnalise, true);
+  assert.strictEqual(e(4).estado, 'sem_lote');
+  assert.strictEqual(j.mesas.length, plan.MESAS[L]);
+  assert.strictEqual(j.filas.flat().length, plan.MESAS[L]);
+});
+
+test('logística: levantar só quando completa e depois do MISU; desfazer; mesa sem lote', async () => {
+  const L = (await api('GET', '/api/logistica/mesas')).body.lado;
+  await lote(`${L}1`, 2);
+  await fechadoHa(`${L}1`, 'Marta Santos', 60);
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${L}1` })).status, 409);
+  await fechadoHa(`${L}1`, 'Tânia Lino', 40);
+  const r = await api('POST', '/api/logistica/levantar', { mesa: `${L}1` });       // provas ok mas o MISU ainda não levantou os contaminados
+  assert.strictEqual(r.status, 409);
+  assert.match(r.body.erro, /contaminados/);
+  assert.strictEqual((await api('POST', `/api/misu/${L}1`, { ligeiros: 0, fortes: 0 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${L}1` })).status, 200);
+  const est = async () => (await api('GET', '/api/logistica/mesas')).body.mesas.find((m) => m.mesa === `${L}1`).estado;
+  assert.strictEqual(await est(), 'levantada');
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${L}1`, desfazer: true })).status, 200);
+  assert.strictEqual(await est(), 'pronta');       // verde: MISU já levantou, vez da logística
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${L}20` })).status, 409);
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', {})).status, 400);
+});
+
+// (último, porque bloqueia este IP durante 1 minuto)
+test('poka-yoke: com contadeira, aprovadas + contaminadas tem de bater com a colocação; sem contadeira confere por construção', async () => {
+  await loteCompleto('A1', true, { o: '15007551' });
+  await api('POST', '/api/misu/A1', { ligeiros: 10, fortes: 10 });
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007551', { aprovadas: 9974 })).status, 200);
+  assert.strictEqual((await lev('A1')).desvio, null);
+  // a supervisora altera a colocação a meio do processo: o levantamento deixa de bater e fica bloqueado
+  assert.strictEqual((await api('POST', '/api/supervisora/mesa/A1', { pin: '8126', totalFrascosCliente: 4000 })).status, 200);
+  assert.match((await lev('A1')).desvio, /Não confere/);
+  const r = await api('POST', '/api/logistica/levantar', { mesa: 'A1' });
+  assert.strictEqual(r.status, 409);
+  assert.match(r.body.erro, /Não confere/);
+  await api('POST', '/api/supervisora/mesa/A1', { pin: '8126', totalFrascosCliente: 5000 });
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: 'A1' })).status, 200);
+  await loteCompleto('A2', false);
+  await api('POST', '/api/misu/A2', { ligeiros: 3, fortes: 2 });
+  assert.strictEqual((await lev('A2')).desvio, null);
+});
+
+test('supervisora: limpar dados de teste só com palavra-passe e confirmação', async () => {
+  await loteCompleto('A1', false);
+  assert.strictEqual((await api('POST', '/api/supervisora/reset', { confirmar: 'APAGAR' })).status, 401);
+  assert.strictEqual((await api('POST', '/api/supervisora/reset', { pin: '8126' })).status, 400);
+  assert.strictEqual((await api('POST', '/api/supervisora/reset', { pin: '8126', confirmar: 'APAGAR' })).status, 200);
+  assert.strictEqual((await api('GET', '/api/levantamento')).body.mesas.length, 0);
+});
+
+test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {
+  for (let i = 0; i < 5; i++) assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: 'x' + i })).status, 401);
+  assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);
+});
+
