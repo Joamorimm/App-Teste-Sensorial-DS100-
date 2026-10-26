@@ -166,3 +166,6 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v63: blocos das ordens com contorno verde nítido.
 - v64: botão Fechar fixo no topo de todas as folhas (sair sem guardar).
 - v65: folhas compactas (2 colunas, ordens recolhíveis); contadores dos provadores e provas do dia passam a seguir o dia de Lisboa (zeram à meia-noite).
+- v66: título 'Menu Supervisão'.
+- v67: Ordens · logística em grelha de 2 cartões compactos; separadores Por levantar / Levantadas.
+- v68: botão ↻ Limpar no formulário de Colocar.
