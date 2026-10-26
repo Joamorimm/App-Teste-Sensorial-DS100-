@@ -154,6 +154,12 @@ main{margin-top:0;padding-top:16px;}
 .cartao-lev{background:#fff;border-radius:16px;padding:13px 14px;box-shadow:0 2px 10px rgba(20,40,20,.06);cursor:pointer;border:2px solid transparent;}
 .cartao-lev.desativada{opacity:.55;cursor:default;}
 .cartao-lev.pendente{border-color:#cfe6c5;}
+.grelha-ord{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grelha-ord .cartao-lev{margin:0;}
+.cartao-lev.ord-mini{padding:10px 11px;display:flex;flex-direction:column;gap:5px;}
+.cartao-lev.ord-mini .topo{font-size:15px;}
+.cartao-lev.ord-mini .estado{margin-left:0;align-self:flex-start;font-size:11px;}
+.cartao-lev.ord-mini .meta{margin-top:0;font-size:12px;}
 .cartao-lev.o-falta{border-color:#f0c64a;background:#fffbea;}
 .cartao-lev.o-ok{border-color:#9fd08a;background:#f1f9ee;}
 .cartao-lev .estado.amarelo{background:#fde68a;color:#7a5200;}
@@ -261,7 +267,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
       </div>
 
       <div id="editHub" class="card" style="display:none;margin-bottom:12px;">
-        <p class="intro" style="margin-top:0;">Menu da supervisora</p>
+        <p class="intro" style="margin-top:0;font-size:18px;font-weight:800;color:#1f3d1a;">Menu Supervisão</p>
         <button class="hub-btn" id="hubProvadores">Provadores · lista de nomes</button>
         <button class="hub-btn" id="hubProvas">Provas de uma mesa · editar ou apagar</button>
         <button class="hub-btn" id="hubMesas">Colocação e levantamento · editar campos</button>
@@ -288,7 +294,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
         <div class="log-kpi cinza"><b id="kLev">0</b><span>levantadas</span></div>
       </div>
       <div class="card" id="colForm" style="display:none;margin-bottom:12px;">
-        <p class="intro" style="margin-top:0;">Coloca por <b>ordem</b>: a app distribui pelas mesas segundo a capacidade de frascos de cada uma.</p>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><p class="intro" style="margin:0;flex:1;">Coloca por <b>ordem</b>: a app distribui pelas mesas segundo a capacidade de frascos de cada uma.</p><button type="button" id="btnLimparCol" style="width:auto;padding:10px 14px;font-size:14px;font-weight:700;color:#1f3d1a;background:#eef3ea;border:1px solid #cfd9c8;border-radius:12px;cursor:pointer;white-space:nowrap;">↻ Limpar</button></div>
         <div class="campo">
           <label>Nº de ordem</label>
           <div class="linha-ordem">

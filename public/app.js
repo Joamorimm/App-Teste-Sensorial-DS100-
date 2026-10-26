@@ -461,6 +461,7 @@ function limparFormColocacao() {
   el('okCol').style.display = 'none'; el('erroCol').textContent = '';
   atualizarResumoCol(); validarOrdem();
 }
+el('btnLimparCol').onclick = () => { limparFormColocacao(); limparMensagensCol(); if (logDados) renderLogistica(); };   // apaga tudo de uma vez
 function cancelarProposta() {
   proposta = null; selecionadas = new Set();
   el('colProposta').style.display = 'none'; el('colProposta').innerHTML = '';
@@ -713,20 +714,29 @@ function textoResultado(o) {
   if (o.resultado === 'pendente') return `Pendente · faltam ${fmt(o.falta)} rolhas · decisão da supervisão`;
   return '';
 }
+function mesasCurto(ms) { return ms.length > 3 ? `${ms[0]}…${ms[ms.length - 1]} (${ms.length} mesas)` : ms.join(', '); }
 function cartaoOrdemLev(o) {
   const [rot, cl] = FASE_ORD[o.fase] || [o.fase, 'aguardar'];
-  const res = textoResultado(o);
-  return `<div class="cartao-lev${o.fase === 'pronta' ? ' o-falta' : o.fase === 'levantada' ? ' o-ok' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
-    <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
-    <div class="meta">Mesas: ${o.mesas.join(', ')} · ${fmt(o.rolhas)} rolhas${o.continua ? ' · continua amanhã' : ''}<br/>Encomenda ${o.encomenda === null ? 'não indicada' : fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${res ? '<br/><b>' + res + '</b>' : ''}</div>
+  let nota = '';
+  if (o.fase === 'levantada' && o.aguardaContadeira) nota = 'a aguardar contadeira';
+  else if (o.fase === 'levantada' && o.resultado === 'pendente') nota = `faltam ${fmt(o.falta)}`;
+  else if (o.fase === 'levantada' && o.resultado === 'parcial') nota = '1.º fecho';
+  else if (o.continua) nota = 'continua amanhã';
+  return `<div class="cartao-lev ord-mini${o.fase === 'pronta' ? ' o-falta' : o.fase === 'levantada' ? ' o-ok' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
+    <div class="topo">${o.op}</div>
+    <span class="estado ${cl}">${rot}</span>
+    <div class="meta">${mesasCurto(o.mesas)}<br/>${fmt(o.rolhas)} rolhas${nota ? ' · <b>' + nota + '</b>' : ''}</div>
   </div>`;
 }
+let levFiltro = 'por';   // 'por' = por levantar (inclui em prova/MISU) | 'lev' = levantadas
 async function renderOrdensLev() {
   await carregarLevantamento();
   const box = el('levOrdens');
   if (!el('levBusca')) {
-    box.innerHTML = '<div class="campo" style="margin-bottom:10px;"><input type="search" id="levBusca" inputmode="numeric" placeholder="Procurar OP (ex: 15007565)" autocomplete="off" /></div><div id="levLista"></div>';
+    box.innerHTML = `<div class="campo" style="margin-bottom:8px;"><input type="search" id="levBusca" inputmode="numeric" placeholder="Procurar OP (ex: 15007565)" autocomplete="off" /></div>
+      <div class="seg" id="segFiltroOrd" style="margin-bottom:10px;"><button data-v="por">Por levantar</button><button data-v="lev">Levantadas</button></div><div id="levLista" class="grelha-ord"></div>`;
     el('levBusca').oninput = () => { levBuscaTxt = el('levBusca').value.replace(/\D/g, ''); listarOrdensLev(); };
+    el('segFiltroOrd').querySelectorAll('button').forEach((b) => { b.onclick = () => { levFiltro = b.dataset.v; listarOrdensLev(); }; });
   }
   el('levBusca').value = levBuscaTxt;
   listarOrdensLev();
@@ -734,9 +744,14 @@ async function renderOrdensLev() {
 let levBuscaTxt = '';
 function listarOrdensLev() {
   const box = el('levLista');
-  const peso = { pronta: 0, levantada: 2, misu: 4, em_prova: 5 };
-  const lista = levOrdens.filter((o) => o.op.includes(levBuscaTxt)).sort((a, b) => (peso[a.fase] - peso[b.fase]) || a.op.localeCompare(b.op));
-  box.innerHTML = lista.length ? lista.map(cartaoOrdemLev).join('') : `<div class="chips-vazio">${levBuscaTxt ? 'Nenhuma OP encontrada.' : 'Sem ordens colocadas hoje.'}</div>`;
+  const peso = { pronta: 0, misu: 1, em_prova: 2, levantada: 3 };
+  const porLev = levOrdens.filter((o) => o.fase !== 'levantada'), lev = levOrdens.filter((o) => o.fase === 'levantada');
+  const bt = el('segFiltroOrd').querySelectorAll('button');
+  bt[0].textContent = `Por levantar (${porLev.length})`; bt[1].textContent = `Levantadas (${lev.length})`;
+  bt.forEach((b) => b.classList.toggle('ativa', b.dataset.v === levFiltro));
+  const base = levFiltro === 'lev' ? lev : porLev;
+  const lista = base.filter((o) => o.op.includes(levBuscaTxt)).sort((a, b) => (peso[a.fase] - peso[b.fase]) || a.op.localeCompare(b.op));
+  box.innerHTML = lista.length ? lista.map(cartaoOrdemLev).join('') : `<div class="chips-vazio" style="grid-column:1/-1;">${levBuscaTxt ? 'Nenhuma OP encontrada.' : levFiltro === 'lev' ? 'Ainda não há ordens levantadas.' : 'Não há ordens por levantar.'}</div>`;
   box.querySelectorAll('.cartao-lev').forEach((c) => { c.onclick = () => folhaOrdem(c.dataset.op); });
 }
 function folhaOrdem(op) {
