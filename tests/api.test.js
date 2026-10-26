@@ -613,6 +613,202 @@ test('supervisora: limpar dados de teste só com palavra-passe e confirmação',
   assert.strictEqual((await api('GET', '/api/levantamento')).body.mesas.length, 0);
 });
 
+test('histórico: todos os movimentos ficam guardados e sobrevivem à limpeza de dados de teste', async () => {
+  await loteCompleto('A1', false);
+  await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1 });
+  await api('POST', '/api/logistica/levantar', { mesa: 'A1' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.strictEqual((await api('POST', '/api/supervisora/movimentos', {})).status, 401);
+  let h = (await api('POST', '/api/supervisora/movimentos', { pin: '8126', formato: 'json' })).body;
+  const acoes = h.movimentos.map((m) => m.acao);
+  assert.ok(acoes.includes('misu') && acoes.includes('levantamento_mesa'));
+  assert.ok(!JSON.stringify(h).includes('8126'));                       // a palavra-passe nunca é guardada
+  await api('POST', '/api/supervisora/reset', { pin: '8126', confirmar: 'APAGAR' });
+  await new Promise((r) => setTimeout(r, 300));
+  const h2 = (await api('POST', '/api/supervisora/movimentos', { pin: '8126', formato: 'json' })).body;
+  assert.ok(h2.total > h.total);                                         // o histórico mantém-se e regista a própria limpeza
+  assert.ok(h2.movimentos.some((m) => m.acao === 'limpeza_dados_teste'));
+});
+
+test('colocação por ordem: 5 ordens (2 e 1 rolhas) partilham a mesma mesa e respeitam os 483 frascos', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const ordens = [['15007565', 95, 2], ['15102480', 25, 2], ['15102467', 230, 2], ['15102469', 7, 1], ['15102470', 91, 1]];
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false };
+  for (const [op, f, r] of ordens) {
+    const p = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: op, frascos: f, rolhasPorFrasco: r });
+    assert.strictEqual(p.status, 200);
+    assert.strictEqual(p.body.segmentos.length, 1);
+    assert.strictEqual(p.body.segmentos[0].mesa, `${L}1`);
+    assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: op, frascos: f, rolhasPorFrasco: r, distribuicao: [{ mesa: `${L}1`, partidos: 0, qvs: 1 }] })).status, 200);
+  }
+  const m = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas.find((x) => x.mesa === `${L}1`);
+  assert.strictEqual(m.ordem, '15007565 + 15102480 + 15102467 + 15102469 + 15102470');
+  assert.strictEqual(m.totalFrascosCliente, 448);
+  assert.strictEqual(m.totalRolhas, 350 * 2 + 98 * 1);              // 798 rolhas
+  assert.strictEqual(m.ocupado, 483);
+  assert.strictEqual(m.qvs, 5);
+  assert.deepStrictEqual(m.segmentos.map((s) => [s.op, s.de, s.ate]), [['15007565', 1, 95], ['15102480', 106, 130], ['15102467', 141, 370], ['15102469', 379, 385], ['15102470', 393, 483]]);
+  // a mesa está cheia: a ordem seguinte vai para a mesa 2
+  const p2 = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: '15102499', frascos: 100, rolhasPorFrasco: 2 });
+  assert.strictEqual(p2.body.segmentos[0].mesa, `${L}2`);
+  // a mesma ordem não se coloca duas vezes
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: '15007565', frascos: 5, rolhasPorFrasco: 2 })).status, 409);
+  // tirar uma ordem do meio
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/remover', { data: dia, ordem: '15102467' })).status, 200);
+  const m2 = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas.find((x) => x.mesa === `${L}1`);
+  assert.strictEqual(m2.totalRolhas, 120 * 2 + 98);
+  assert.ok(!m2.ordem.includes('15102467'));
+});
+
+test('colocação por ordem: uma ordem grande reparte-se por várias mesas; valida dados e dia', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const base = { data: dia, tipo: 'GRUPO', contadeira: true, dsrol: true, ordem: '15102001', rolhasPorFrasco: 4 };
+  const p = await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 1000 });
+  assert.deepStrictEqual(p.body.segmentos.map((s) => [s.mesa, s.frascos]), [[`${L}1`, 483], [`${L}2`, 483], [`${L}3`, 34]]);
+  assert.strictEqual(p.body.totalRolhas, 4000);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 0 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 10, rolhasPorFrasco: 3 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 10, ordem: '123456' })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 999999 })).body.semCapacidade > 0, true);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...base, frascos: 999999 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...base, frascos: 1000, tipo: 'X' })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...base, frascos: 1000, distribuicao: [{ mesa: `${L}3`, partidos: 99 }] })).status, 400);   // mais partidos do que frascos
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...base, frascos: 1000, distribuicao: [{ mesa: `${L}1`, partidos: 3 }, { mesa: `${L}2`, partidos: 0 }] })).status, 200);
+  const j = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas;
+  assert.strictEqual(j.find((x) => x.mesa === `${L}1`).totalRolhas, 483 * 4);
+  assert.strictEqual(j.find((x) => x.mesa === `${L}1`).rolhasPartidas, 12);
+  assert.strictEqual(j.find((x) => x.mesa === `${L}3`).totalRolhas, 34 * 4);
+  // hoje só com palavra-passe
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/proposta', { ...base, data: plan.hojeLisboa(), frascos: 10 })).status, 401);
+  // tirar a ordem limpa as 3 mesas
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/remover', { data: dia, ordem: '15102001' })).status, 200);
+  assert.strictEqual((await api('GET', `/api/lotes?data=${dia}`)).body.length, 0);
+});
+
+test('colocação por ordem: mesa partilhada em levantamento (hoje): MISU à mesa com as rolhas somadas', async () => {
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', contadeira: false, dsrol: false };
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15007565', frascos: 95, rolhasPorFrasco: 2, distribuicao: [{ mesa: `${Lh}1`, partidos: 2 }] })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102469', frascos: 7, rolhasPorFrasco: 1 })).status, 200);
+  await fechadoHa(`${Lh}1`, 'Marta Santos', 60);
+  await fechadoHa(`${Lh}1`, 'Tânia Lino', 50);
+  const m = await lev(`${Lh}1`);
+  assert.strictEqual(m.totalRolhas, 95 * 2 + 7);
+  assert.strictEqual(m.rolhasPartidas, 4);
+  assert.strictEqual(m.segmentos.length, 2);
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ligeiros: 10, fortes: 5 })).status, 400);             // tem de ser por ordem
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { ligeiros: 10, fortes: 5 } } })).status, 400);   // falta a outra ordem
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { ligeiros: 10, fortes: 5 }, '15102469': { ligeiros: 1, fortes: 1 } } })).status, 200);
+  const m2 = await lev(`${Lh}1`);
+  assert.strictEqual(m2.aprovadas, 197 - 17 - 4);
+  assert.deepStrictEqual(m2.segmentos.map((g) => g.aprovadas), [190 - 15 - 4, 7 - 2]);   // por ordem
+});
+
+test('contadeira POR ORDEM: numa mesa partilhada, uma ordem vai à contadeira e a outra não', async () => {
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, rolhasPorFrasco: 2 };
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15007565', frascos: 100, contadeira: true })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102480', frascos: 25, contadeira: false })).status, 200);
+  await fechadoHa(`${Lh}1`, 'Marta Santos', 60);
+  await fechadoHa(`${Lh}1`, 'Tânia Lino', 50);
+  let m = await lev(`${Lh}1`);
+  assert.strictEqual(m.contadeira, true);                                   // a mesa passa pela contadeira (tem uma ordem com contadeira)
+  assert.deepStrictEqual(m.segmentos.map((g) => g.contadeira), [true, false]);
+  assert.deepStrictEqual(m.contagensOp.map((c) => c.op), ['15007565']);     // só a ordem com contadeira
+  // com contadeira só fortes; sem contadeira ligeiros e fortes
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { fortes: 4 }, '15102480': { fortes: 1 } } })).status, 400);  // falta ligeiros na ordem sem contadeira
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { fortes: 4 }, '15102480': { ligeiros: 2, fortes: 1 } } })).status, 200);
+  m = await lev(`${Lh}1`);
+  assert.strictEqual(m.segmentos[0].ligeiros, 0);
+  assert.strictEqual(m.segmentos[1].aprovadas, 50 - 3);                     // 25 frascos x 2 rolhas - 2 - 1
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15102480', { aprovadas: 1 })).status, 404);   // a outra ordem não vai à contadeira
+  // levantar bloqueado até a contadeira contar a OP 15007565
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 409);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 300 })).status, 400);  // 300 + 4 > 200
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 200);
+  // depois de entregue à contadeira o MISU já não mexe
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { fortes: 1 }, '15102480': { ligeiros: 0, fortes: 0 } } })).status, 409);
+});
+
+test('identificação das ordens numa mesa partilhada: seq (A7-1, A7-2, ...) e proposta a avisar', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, rolhasPorFrasco: 2 };
+  const p1 = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: '15007565', frascos: 95 });
+  assert.deepStrictEqual([p1.body.segmentos[0].seq, p1.body.segmentos[0].jaTem], [1, 0]);
+  await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15007565', frascos: 95 });
+  const p2 = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: '15102480', frascos: 25 });
+  assert.deepStrictEqual([p2.body.segmentos[0].seq, p2.body.segmentos[0].jaTem], [2, 1]);
+  await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15102480', frascos: 25 });
+  const m = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas.find((x) => x.mesa === `${L}1`);
+  assert.deepStrictEqual(m.segmentos.map((s) => s.seq), [1, 2]);
+});
+
+test('supervisora: lista de provadores (adicionar, renomear, desativar, reativar) só com palavra-passe', async () => {
+  const P = (b) => api('POST', '/api/supervisora/provadores', b);
+  assert.strictEqual((await P({ acao: 'listar' })).status, 401);
+  const l0 = (await P({ pin: '8126', acao: 'listar' })).body.provadores;
+  assert.ok(l0.length >= 9);
+  assert.strictEqual((await P({ pin: '8126', acao: 'adicionar', nome: 'Ana Catarina Silva' })).status, 409);   // já existe
+  const l1 = (await P({ pin: '8126', acao: 'adicionar', nome: '  Rita   Costa ' })).body.provadores;
+  const rita = l1.find((x) => x.nome === 'Rita Costa');
+  assert.ok(rita && rita.ativo);
+  assert.strictEqual((await P({ pin: '8126', acao: 'renomear', id: rita.id, nome: 'Rita Costa Lima' })).status, 200);
+  assert.ok((await api('GET', '/api/aprovadores')).body.some((x) => x.nome === 'Rita Costa Lima'));
+  await P({ pin: '8126', acao: 'desativar', id: rita.id });
+  assert.ok(!(await api('GET', '/api/aprovadores')).body.some((x) => x.nome === 'Rita Costa Lima'));
+  await P({ pin: '8126', acao: 'ativar', id: rita.id });
+  assert.ok((await api('GET', '/api/aprovadores')).body.some((x) => x.nome === 'Rita Costa Lima'));
+  assert.strictEqual((await P({ pin: '8126', acao: 'adicionar', nome: 'X' })).status, 400);
+});
+
+test('supervisora: ver, corrigir e apagar as provas de uma mesa', async () => {
+  await lote('A1', 2);
+  await fechadoHa('A1', 'Marta Santos', 60);
+  await fechadoHa('A1', 'Tânia Lino', 40);
+  assert.strictEqual((await api('POST', '/api/supervisora/registos', { mesa: 'A1' })).status, 401);
+  const r = (await api('POST', '/api/supervisora/registos', { pin: '8126', mesa: 'A1' })).body.registos;
+  assert.strictEqual(r.length, 2);
+  const [a, b] = r;
+  assert.strictEqual((await api('POST', `/api/supervisora/registo/${a.id}`, { pin: '8126', acao: 'editar', aprovador: 'Ninguém' })).status, 400);
+  const e = await api('POST', `/api/supervisora/registo/${a.id}`, { pin: '8126', acao: 'editar', aprovador: 'Raquel Santos', abertura: '08:15', fecho: '08:40' });
+  assert.strictEqual(e.status, 200);
+  assert.strictEqual(e.body.registo.aprovador, 'Raquel Santos');
+  assert.strictEqual(e.body.registo.abertura, '08:15');
+  assert.strictEqual(e.body.registo.fecho, '08:40');
+  assert.strictEqual((await api('POST', `/api/supervisora/registo/${a.id}`, { pin: '8126', acao: 'editar', abertura: '25:00' })).status, 400);
+  assert.strictEqual((await api('POST', `/api/supervisora/registo/${b.id}`, { pin: '8126', acao: 'apagar' })).status, 200);
+  assert.strictEqual((await api('POST', '/api/supervisora/registos', { pin: '8126', mesa: 'A1' })).body.registos.length, 1);
+  assert.strictEqual((await api('POST', '/api/supervisora/registo/999999', { pin: '8126', acao: 'apagar' })).status, 404);
+});
+
+test('supervisora: editar uma ordem (frascos, rolhas, partidos, contadeira...) respeita a capacidade da mesa', async () => {
+  const dia = proximoUtil();
+  const L = plan.ladoDoDia(dia);
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, rolhasPorFrasco: 2 };
+  await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15007565', frascos: 95 });
+  await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15102480', frascos: 25 });
+  const E = (b) => api('POST', '/api/supervisora/ordem', { pin: '8126', data: dia, mesa: `${L}1`, op: '15007565', ...b });
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem', { data: dia, mesa: `${L}1`, op: '15007565', frascos: 90 })).status, 401);
+  assert.strictEqual((await E({ frascos: 200 })).status, 400);                  // passava para cima da ordem seguinte (começa no 106)
+  assert.strictEqual((await E({ frascosPartidos: 999 })).status, 400);
+  assert.strictEqual((await E({ rolhasPorFrasco: 3 })).status, 400);
+  assert.strictEqual((await E({ novaOrdem: '15102480' })).status, 409);         // já colocada
+  assert.strictEqual((await E({ frascos: 100, rolhasPorFrasco: 4, frascosPartidos: 2, qvs: 3, contadeira: true, tipo: 'GRUPO', dsrol: true })).status, 200);
+  const m = (await api('GET', `/api/logistica/mesas?data=${dia}`)).body.mesas.find((x) => x.mesa === `${L}1`);
+  assert.strictEqual(m.totalRolhas, 100 * 4 + 25 * 2);
+  assert.strictEqual(m.rolhasPartidas, 2 * 4);
+  assert.strictEqual(m.segmentos[0].ate, 100);
+  assert.strictEqual(m.segmentos[0].contadeira, true);
+  assert.strictEqual((await E({ novaOrdem: '15007999' })).status, 200);
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem', { pin: '8126', data: '2030-01-01', mesa: `${L}1`, op: '15007999' })).status, 400);
+});
+
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {
   for (let i = 0; i < 5; i++) assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: 'x' + i })).status, 401);
   assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);

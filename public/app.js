@@ -263,7 +263,7 @@ let selecionadas = new Set();
 const PREFIXOS_OP = ['150', '151', '950'];
 
 let colocarHoje = false;        // só a supervisora: colocar as mesas de hoje (para testar no próprio dia)
-function dataLogistica() { return logModo === 'colocar' && !colocarHoje ? proximoDiaUtil() : isoLocal(new Date()); }
+function dataLogistica() { return (logModo === 'colocar' && !colocarHoje) || (logModo === 'editarMesas' && editDia === 'amanha') ? proximoDiaUtil() : isoLocal(new Date()); }
 
 async function carregarLogistica() {
   try {
@@ -276,22 +276,31 @@ async function carregarLogistica() {
   } catch (e) { el('erroLog').textContent = 'Não foi possível atualizar o mapa.'; }
 }
 
+let editDia = 'hoje';   // no menu da supervisora (colocação e levantamento): mesas de hoje ou de amanhã
 function definirModo(modo, hojeTeste) {
   logModo = modo;
   colocarHoje = modo === 'colocar' && !!hojeTeste;
-  el('editBar').style.display = modo === 'editar' ? '' : 'none';
+  if (modo === 'editar' || modo === 'editarMesas') { if (modo === 'editar') editDia = 'hoje'; definirSeg('segEditDia', editDia); }
+  const edit = ['editar', 'editarMesas', 'editarProvas'].includes(modo);
+  const hub = modo === 'editar';
+  el('editHub').style.display = hub ? '' : 'none';
+  el('editVoltar').style.display = modo === 'editarMesas' || modo === 'editarProvas' ? '' : 'none';
+  el('editDiaBox').style.display = modo === 'editarMesas' ? '' : 'none';
   selecionadas = new Set();
   el('abaLevantar').classList.toggle('ativa', modo === 'levantar');
   el('abaColocar').classList.toggle('ativa', modo === 'colocar' && !hojeTeste);
-  el('abaEditar').classList.toggle('ativa', modo === 'editar');
-  el('logResumoLev').style.display = modo !== 'colocar' ? '' : 'none';
-  el('legLev').style.display = modo !== 'colocar' ? '' : 'none';
+  el('abaEditar').classList.toggle('ativa', edit);
+  el('logResumoLev').style.display = modo === 'levantar' || modo === 'editarMesas' || modo === 'editarProvas' ? '' : 'none';
+  el('legLev').style.display = modo === 'levantar' || modo === 'editarMesas' || modo === 'editarProvas' ? '' : 'none';
   el('legCol').style.display = modo === 'colocar' ? '' : 'none';
   el('colForm').style.display = modo === 'colocar' ? '' : 'none';
+  el('logTopo').style.display = hub ? 'none' : '';
+  el('logMapa').style.display = hub ? 'none' : '';
   if (estado.pollTimer) { clearInterval(estado.pollTimer); estado.pollTimer = null; }
   if (modo === 'levantar') estado.pollTimer = setInterval(carregarLogistica, 15000);
   limparMensagensCol();
-  carregarLogistica();
+  if (modo === 'colocar') limparFormColocacao();   // cada introdução começa sem os dados da anterior
+  if (!hub) carregarLogistica();
 }
 el('abaLevantar').onclick = () => definirModo('levantar');
 let pinSessao = null; // palavra-passe da supervisora (só em memória, enquanto a app está aberta)
@@ -318,6 +327,15 @@ function pedirPin() {
 }
 el('abaColocar').onclick = () => definirModo('colocar');   // sem palavra-passe: a logística coloca as mesas de amanhã
 el('btnColocarHoje').onclick = () => definirModo('colocar', true);
+el('btnHistorico').onclick = async () => {
+  try {
+    const r = await fetch('/api/supervisora/movimentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: pinSessao }) });
+    if (!r.ok) { const d = await r.json(); if (r.status === 401) pinSessao = null; throw new Error(d.erro || 'Erro'); }
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a'); a.href = url; a.download = 'historico_movimentos_DS100_' + isoLocal(new Date()) + '.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) { el('erroLog').textContent = e.message; }
+};
 el('btnReset').onclick = async () => {
   if (!confirm('Apagar TODAS as mesas, provas e levantamentos? Só para limpar dados de teste.')) return;
   try { await enviar('/api/supervisora/reset', { pin: pinSessao, confirmar: 'APAGAR' }); carregarLogistica(); alert('Dados de teste apagados.'); }
@@ -327,14 +345,19 @@ el('abaEditar').onclick = async () => {                     // só a supervisora
   if (!pinSessao && !(await pedirPin())) return;
   definirModo('editar');
 };
+el('btnHub').onclick = () => definirModo('editar');
+el('hubMesas').onclick = () => definirModo('editarMesas');
+el('hubProvas').onclick = () => definirModo('editarProvas');
+el('hubProvadores').onclick = () => folhaProvadores();
+el('segEditDia').querySelectorAll('button').forEach((b) => { b.onclick = () => { editDia = b.dataset.v; definirModo('editarMesas'); }; });
 
 function renderLogistica() {
   const d = logDados;
   const por = new Map(d.mesas.map((m) => [parseInt(m.mesa.slice(1), 10), m]));
   el('logTopo').innerHTML = logModo === 'colocar'
-    ? `Data de logística: <b>${dataPT(isoLocal(new Date()))}</b> · Data da prova: <b>${dataPT(d.data)}</b>${colocarHoje ? ' (teste, supervisora)' : ''} · lado <b>${d.lado}</b><br/>Toca nas mesas para selecionar`
-    : logModo === 'editar'
-    ? `Modo supervisora · toca numa mesa de hoje para corrigir`
+    ? `Data de logística: <b>${dataPT(isoLocal(new Date()))}</b> · Data da prova: <b>${dataPT(d.data)}</b>${colocarHoje ? ' (teste, supervisora)' : ''} · lado <b>${d.lado}</b><br/>Escreve a ordem para calcular as mesas · toca numa mesa para ver as suas ordens`
+    : logModo === 'editarMesas' || logModo === 'editarProvas'
+    ? `Modo supervisora · ${logModo === 'editarProvas' ? 'toca numa mesa para ver, editar ou apagar as provas de hoje' : 'toca numa mesa de ' + (editDia === 'amanha' ? 'amanhã' : 'hoje') + ' para editar'}`
     : `Lado <b>${d.lado}</b> · ${d.mesas.filter((m) => m.estado === 'em_prova').length} em prova · atualiza sozinho`;
   el('kVerdes').textContent = d.mesas.filter((m) => m.estado === 'pronta').length;
   el('kVerm').textContent = d.mesas.filter((m) => m.estado === 'misu').length;
@@ -345,8 +368,8 @@ function renderLogistica() {
     fila.forEach((n) => {
       const m = por.get(n); if (!m) return;
       let sub = '';
-      if (logModo === 'colocar') sub = m.ordem ? String(m.ordem).slice(-4) : '';
-      else sub = { sem_lote: '', levantada: 'levantada', misu: 'MISU', pronta: 'logística' }[m.estado] ?? `${m.feitos}/${m.necessarios}`;
+      if (logModo === 'colocar' || (logModo === 'editarMesas' && editDia === 'amanha')) sub = m.capacidade ? `${m.ocupado || 0}/${m.capacidade}${(m.segmentos || []).length > 1 ? ' · ' + m.segmentos.length + ' ord.' : ''}` : '';
+      else sub = { sem_lote: '', levantada: 'levantada', misu: 'MISU', pronta: 'logística', colocada: 'colocada' }[m.estado] ?? `${m.feitos}/${m.necessarios}`;
       const sel = logModo === 'colocar' && selecionadas.has(m.mesa) ? ' sel' : '';
       html += `<div class="mesa ${m.estado}${sel}${fila.length === 1 ? ' solta' : ''}" data-mesa="${m.mesa}">${m.mesa}<small>${sub}</small></div>`;
     });
@@ -355,47 +378,33 @@ function renderLogistica() {
   });
   el('logMapa').innerHTML = html;
   el('logMapa').querySelectorAll('.mesa').forEach((n) => {
-    n.onclick = () => (logModo === 'colocar' ? alternarMesa(n.dataset.mesa) : logModo === 'editar' ? folhaEditar(n.dataset.mesa) : abrirMesaMapa(n.dataset.mesa));
+    n.onclick = () => (logModo === 'colocar' ? folhaMesaColocada(n.dataset.mesa) : logModo === 'editarMesas' ? (editDia === 'amanha' ? folhaEditarAmanha(n.dataset.mesa) : folhaEditar(n.dataset.mesa)) : logModo === 'editarProvas' ? folhaProvasMesa(n.dataset.mesa) : abrirMesaMapa(n.dataset.mesa));
   });
-  if (logModo === 'colocar') atualizarSelecao();
 }
 
-// ----- Colocar: seleção de mesas + formulário -----
+// ----- Colocar POR ORDEM: o nº de ordem dispara o cálculo das mesas (layout + capacidade de frascos) -----
+let proposta = null;   // última proposta calculada
+function limparMensagensCol() { el('erroCol').textContent = ''; el('okCol').style.display = 'none'; }
 function atualizarResumoCol() {
   const r = Number(valorSeg('segRolhas')) || 0;
   const f = Number(el('colTotal').value) || 0;
-  const p = Number(el('colPartidos').value) || 0;
   el('colResumo').innerHTML = r && f
-    ? `Total de rolhas da mesa = ${fmt(f)} frascos × ${r} = <b>${fmt(f * r)}</b><br/>Frascos partidos: ${fmt(p)} × ${r} = <b>${fmt(p * r)}</b> rolhas`
-    : 'Escolhe as rolhas por frasco e indica os frascos para ver o total de rolhas.';
+    ? `Total de rolhas da ordem = ${fmt(f)} frascos × ${r} = <b>${fmt(f * r)}</b>`
+    : 'Indica os frascos e as rolhas por frasco para ver o total de rolhas.';
+  if (proposta) cancelarProposta();   // mudou algo: a proposta deixa de valer
 }
-function limparMensagensCol() { el('erroCol').textContent = ''; el('okCol').style.display = 'none'; }
-function alternarMesa(codigo) {
-  if (selecionadas.has(codigo)) selecionadas.delete(codigo); else selecionadas.add(codigo);
-  limparMensagensCol();
-  // se escolhi uma só mesa já colocada, mostra os dados dela para editar
-  if (selecionadas.size === 1) {
-    const m = logDados.mesas.find((x) => x.mesa === [...selecionadas][0]);
-    if (m && m.ordem) preencherForm(m);
-  }
-  renderLogistica();
+function limparFormColocacao() {
+  ['colOrdem', 'colTotal'].forEach((id) => { el(id).value = ''; });
+  ['segRolhas', 'segTipo', 'segContadeira', 'segDsrol'].forEach((id) => definirSeg(id, null));
+  proposta = null; selecionadas = new Set();
+  el('colProposta').style.display = 'none'; el('colProposta').innerHTML = '';
+  el('okCol').style.display = 'none'; el('erroCol').textContent = '';
+  atualizarResumoCol(); validarOrdem();
 }
-function numMesa(c) { return parseInt(c.slice(1), 10); }
-function atualizarSelecao() {
-  const l = [...selecionadas].sort((a, b) => numMesa(a) - numMesa(b));
-  el('colSel').textContent = l.length ? `${l.join(', ')}  (${l.length})` : 'Toca nas mesas para selecionar';
-}
-function preencherForm(m) {
-  el('colOrdem').value = m.ordem || '';
-  definirSeg('segRolhas', m.rolhasPorFrasco ? String(m.rolhasPorFrasco) : null);
-  el('colTotal').value = m.totalFrascosCliente || '';
-  definirSeg('segContadeira', m.contadeira === true ? 'sim' : m.contadeira === false ? 'nao' : null);
-  definirSeg('segTipo', m.tipo || null);
-  definirSeg('segDsrol', m.dsrol === true ? 'sim' : m.dsrol === false ? 'nao' : null);
-  el('colPartidos').value = m.frascosPartidos || '';
-  el('colQvs').value = m.qvs || '';
-  atualizarResumoCol();
-  validarOrdem();
+function cancelarProposta() {
+  proposta = null; selecionadas = new Set();
+  el('colProposta').style.display = 'none'; el('colProposta').innerHTML = '';
+  if (logDados) renderLogistica();
 }
 function definirSeg(id, v) {
   el(id).querySelectorAll('button').forEach((b) => b.classList.toggle('ativa', b.dataset.v === v));
@@ -413,56 +422,85 @@ function validarOrdem() {
   dica.textContent = mau ? 'Nº de ordem inválido: tem de começar por 150, 151 ou 950' : 'Tem de começar por 150, 151 ou 950';
 }
 el('colTotal').addEventListener('input', atualizarResumoCol);
-el('colPartidos').addEventListener('input', atualizarResumoCol);
-el('colOrdem').addEventListener('input', () => { el('colOrdem').value = el('colOrdem').value.replace(/\D/g, ''); validarOrdem(); });
+el('colOrdem').addEventListener('input', () => { el('colOrdem').value = el('colOrdem').value.replace(/\D/g, ''); validarOrdem(); if (proposta) cancelarProposta(); });
 
-el('btnGuardarCol').onclick = async () => {
-  limparMensagensCol();
+function dadosOrdem() {
   const ordem = el('colOrdem').value.trim();
-  const rolhas = valorSeg('segRolhas');
-  const total = Number(el('colTotal').value);
-  const cont = valorSeg('segContadeira');
-  const tipo = valorSeg('segTipo');
-  const dsrol = valorSeg('segDsrol');
-  const partidos = el('colPartidos').value.trim() === '' ? 0 : Number(el('colPartidos').value);
-  if (!selecionadas.size) { el('erroCol').textContent = 'Seleciona pelo menos uma mesa.'; return; }
-  if (!ordemValida(ordem)) { el('erroCol').textContent = 'Nº de ordem inválido: só números e a começar por 150, 151 ou 950.'; return; }
-  if (!tipo) { el('erroCol').textContent = 'Escolhe o tipo: EUR, GRUPO ou AMOSTRA.'; return; }
-  if (!rolhas) { el('erroCol').textContent = 'Escolhe as rolhas por frasco (1, 2 ou 4).'; return; }
-  if (!Number.isInteger(total) || total < 1) { el('erroCol').textContent = 'Indica o total de frascos/cliente.'; return; }
-  if (!cont) { el('erroCol').textContent = 'Indica se tem contadeira (Sim ou Não).'; return; }
-  if (!dsrol) { el('erroCol').textContent = 'Indica DSROL (Sim ou Não).'; return; }
-  if (!Number.isInteger(partidos) || partidos < 0) { el('erroCol').textContent = 'Frascos partidos: indica um número inteiro (0 ou mais).'; return; }
-  el('btnGuardarCol').disabled = true;
+  const rolhas = valorSeg('segRolhas'), tipo = valorSeg('segTipo'), cont = valorSeg('segContadeira'), dsrol = valorSeg('segDsrol');
+  const frascos = Number(el('colTotal').value);
+  if (!ordemValida(ordem)) throw new Error('Nº de ordem inválido: só números e a começar por 150, 151 ou 950.');
+  if (!Number.isInteger(frascos) || frascos < 1) throw new Error('Indica a quantidade de frascos da ordem.');
+  if (!rolhas) throw new Error('Escolhe as rolhas por frasco (1, 2 ou 4).');
+  if (!tipo) throw new Error('Escolhe o tipo: EUR, GRUPO ou AMOSTRA.');
+  if (!cont) throw new Error('Indica se tem contadeira (Sim ou Não).');
+  if (!dsrol) throw new Error('Indica DSROL (Sim ou Não).');
+  return { data: dataLogistica(), ordem, frascos, rolhasPorFrasco: Number(rolhas), tipo, contadeira: cont === 'sim', dsrol: dsrol === 'sim', pin: colocarHoje ? pinSessao : undefined };
+}
+el('btnCalcular').onclick = async () => {
+  limparMensagensCol();
   try {
-    const r = await fetch('/api/logistica/colocar', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: dataLogistica(), mesas: [...selecionadas], ordem, rolhasPorFrasco: Number(rolhas), totalFrascosCliente: total, contadeira: cont === 'sim', qvs: el('colQvs').value.trim() === '' ? 0 : Number(el('colQvs').value), tipo, dsrol: dsrol === 'sim', frascosPartidos: partidos, pin: colocarHoje ? pinSessao : undefined }),
-    });
-    const d = await r.json();
-    if (r.status === 401) { pinSessao = null; }
-    if (!r.ok) throw new Error(d.erro || 'Erro ao guardar.');
-    const n = selecionadas.size;
-    selecionadas = new Set();
-    el('okCol').textContent = `Guardado: ${n} ${n === 1 ? 'mesa' : 'mesas'} com a OP ${ordem}.`;
+    const dados = dadosOrdem();
+    const p = await enviar('/api/logistica/ordem/proposta', dados);
+    proposta = { dados, ...p };
+    selecionadas = new Set(p.segmentos.map((s) => s.mesa));
+    const linhas = p.segmentos.map((s, i) => `<div class="prop-linha" data-mesa="${s.mesa}">
+        <div><b>${s.jaTem > 0 ? `${s.mesa}-${s.seq}` : s.mesa}</b> · frascos ${s.de}–${s.ate} (${fmt(s.frascos)} frascos · ${fmt(s.rolhas)} rolhas)${s.jaTem > 0 ? `<br/><small>A mesa ${s.mesa} já tem ${s.jaTem} ${s.jaTem === 1 ? 'ordem' : 'ordens'}: esta fica ${s.mesa}-${s.seq} (a mesa vai ter mais ordens).</small>` : ''}</div>
+        <div class="prop-campos">
+          <label>Frascos partidos<input type="number" inputmode="numeric" min="0" max="${s.frascos}" placeholder="0" class="pPart" /></label>
+          <label>QVs (rolhas)<input type="number" inputmode="numeric" min="0" placeholder="0" class="pQv" /></label>
+        </div></div>`).join('');
+    el('colProposta').innerHTML = `<div class="bloco-rolhas"><b>Proposta:</b> ${fmt(p.frascos)} frascos × ${p.rolhasPorFrasco} = ${fmt(p.totalRolhas)} rolhas em ${p.segmentos.length} ${p.segmentos.length === 1 ? 'mesa' : 'mesas'} (lado ${p.lado})</div>
+      ${p.semCapacidade > 0 ? `<div class="aviso-hand">Sem espaço para ${fmt(p.semCapacidade)} frascos neste lado.</div>` : ''}
+      ${linhas}
+      <button class="primario" id="btnConfirmarOrdem" ${p.semCapacidade > 0 ? 'disabled' : ''}>Confirmar colocação</button>
+      <button class="secundario" id="btnCancelarOrdem">Cancelar</button>`;
+    el('colProposta').style.display = '';
+    el('btnCancelarOrdem').onclick = cancelarProposta;
+    el('btnConfirmarOrdem').onclick = confirmarOrdem;
+    renderLogistica();
+  } catch (e) { el('erroCol').textContent = e.message; }
+};
+async function confirmarOrdem() {
+  limparMensagensCol();
+  const dados = proposta.dados;
+  const distribuicao = [...el('colProposta').querySelectorAll('.prop-linha')].map((l) => ({
+    mesa: l.dataset.mesa,
+    partidos: l.querySelector('.pPart').value.trim() === '' ? 0 : Number(l.querySelector('.pPart').value),
+    qvs: l.querySelector('.pQv').value.trim() === '' ? 0 : Number(l.querySelector('.pQv').value),
+  }));
+  el('btnConfirmarOrdem').disabled = true;
+  try {
+    const r = await enviar('/api/logistica/ordem/confirmar', { ...dados, distribuicao });
+    el('okCol').textContent = `Colocada: OP ${dados.ordem} em ${r.mesas.join(', ')}.`;
+    el('okCol').style.display = '';
+    limparFormColocacao();           // cada introdução começa limpa
+    el('okCol').textContent = `Colocada: OP ${dados.ordem} em ${r.mesas.join(', ')}.`;
     el('okCol').style.display = '';
     await carregarLogistica();
-  } catch (e) { el('erroCol').textContent = e.message; }
-  el('btnGuardarCol').disabled = false;
-};
-
-el('btnRemoverCol').onclick = async () => {
-  limparMensagensCol();
-  if (!selecionadas.size) { el('erroCol').textContent = 'Seleciona as mesas a tirar.'; return; }
-  try {
-    const r = await fetch('/api/logistica/remover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: dataLogistica(), mesas: [...selecionadas], pin: colocarHoje ? pinSessao : undefined }) });
-    const d = await r.json();
-    if (r.status === 401) { pinSessao = null; }
-    if (!r.ok) throw new Error(d.erro || 'Erro ao remover.');
-    selecionadas = new Set();
-    await carregarLogistica();
-  } catch (e) { el('erroCol').textContent = e.message; }
-};
+  } catch (e) { el('erroCol').textContent = e.message; if (/palavra-passe/i.test(e.message)) pinSessao = null; if (el('btnConfirmarOrdem')) el('btnConfirmarOrdem').disabled = false; }
+}
+// tocar numa mesa no ecrã de colocação: ver as ordens que lá estão e tirar uma ordem
+function folhaMesaColocada(codigo) {
+  const m = logDados.mesas.find((x) => x.mesa === codigo);
+  if (!m) return;
+  const segs = m.segmentos || [];
+  const linhas = segs.length ? segs.map((s) => `<div class="prop-linha"><div><b>${segs.length > 1 ? `${m.mesa}-${s.seq || '?'} · ` : ''}OP ${s.op}</b> · frascos ${s.de}–${s.ate} (${fmt(s.frascos)} frascos × ${s.rolhasPorFrasco} = ${fmt(s.rolhas)} rolhas)<br/>Partidos: ${fmt(s.frascosPartidos)} (${fmt(s.rolhasPartidas)} rolhas) · QVs: ${fmt(s.qvs)} · ${s.contadeira ? 'contadeira' : 'sem contadeira'} · ${s.tipo}${s.dsrol ? ' · DSROL' : ''}</div>
+      <button class="secundario" data-op="${s.op}" style="margin-top:6px;">Tirar esta ordem</button></div>`).join('')
+    : '<div class="aviso-hand">Mesa livre: sem ordens.</div>';
+  abrirFolha(`<h3>Mesa ${m.mesa}</h3>
+    <div class="bloco-rolhas">Capacidade: <b>${fmt(m.capacidade)}</b> frascos · ocupado até ao frasco <b>${fmt(m.ocupado)}</b>${segs.length ? `<br/>Total da mesa: <b>${fmt(m.totalRolhas)}</b> rolhas` : ''}</div>
+    ${linhas}
+    <button class="secundario" id="mcX">Fechar</button>
+    <div class="msg-erro" id="mcErro"></div>`);
+  el('mcX').onclick = fecharFolha;
+  el('sheetBox').querySelectorAll('button[data-op]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm(`Tirar a ordem ${b.dataset.op} desta mesa (e das outras mesas onde esteja)?`)) return;
+      try { await enviar('/api/logistica/ordem/remover', { data: dataLogistica(), ordem: b.dataset.op, pin: colocarHoje ? pinSessao : undefined }); fecharFolha(); carregarLogistica(); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('mcErro').textContent = e.message; }
+    };
+  });
+}
 
 // ----- Câmara: ler o nº de ordem (código de barras / QR) -----
 let camStream = null, camAtiva = false;
@@ -517,7 +555,16 @@ async function carregarLevantamento() {
 }
 
 // linhas de rolhas de uma mesa (os frascos partidos aparecem sempre)
+function rotuloOrdem(m, g, i) { return (m.segmentos || []).length > 1 ? `${m.mesa}-${g.seq || i + 1}` : m.mesa; }
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function linhasRolhas(m) {
+  const segs = m.segmentos || [];
+  if (segs.length) {
+    return `<div class="bloco-rolhas">${segs.map((g, i) => `<b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b>: ${fmt(g.frascos)} frascos × ${g.rolhasPorFrasco} rolhas = ${fmt(g.rolhas)}${g.frascosPartidos ? ` · partidos ${fmt(g.frascosPartidos)} (${fmt(g.rolhasPartidas)} rolhas)` : ''}`).join('<br/>')}<br/>
+      Total de rolhas da mesa: <b>${fmt(m.totalRolhas)}</b><br/>
+      Frascos partidos: <b>${fmt(m.frascosPartidos)}</b> (${fmt(m.rolhasPartidas)} rolhas)
+    </div>`;
+  }
   return `<div class="bloco-rolhas">
     Rolhas por frasco: <b>${fmt(m.rolhasPorFrasco)}</b> · Frascos: <b>${fmt(m.totalFrascos)}</b><br/>
     Total de rolhas da mesa: <b>${fmt(m.totalRolhas)}</b><br/>
@@ -555,7 +602,7 @@ async function abrirPerfil() {
 function abrirFolha(html) { el('sheetBox').innerHTML = html; el('modalSheet').style.display = 'flex'; }
 function fecharFolha() { el('modalSheet').style.display = 'none'; }
 function campoNum(id, rotulo, valor, desativado) {
-  return `<div class="sheet-campo"><label>${rotulo}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="0" value="${valor ?? ''}" ${desativado ? 'disabled' : ''} /></div>`;
+  return `<div class="sheet-campo"><label>${rotulo}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="0" autocomplete="off" value="${valor ?? ''}" ${desativado ? 'disabled' : ''} /></div>`;
 }
 const lerNum = (id) => { const v = el(id).value.trim(); return v === '' ? undefined : Number(v); };
 async function enviar(url, corpo) {
@@ -568,7 +615,45 @@ async function enviar(url, corpo) {
 // ----- MISU (trabalha à mesa) -----
 // O MISU aponta SEMPRE os contaminados (aroma ligeiro e forte). Só depois a mesa segue: para a contadeira (se
 // a colocação disser que sim) ou para a logística (que subtrai ao total da mesa).
+function folhaMisuOrdens(m) {
+  const segs = m.segmentos;
+  const entregue = m.contadeira && m.misuEstado === 'entregue';
+  const blocos = segs.map((g, i) => `<div class="prop-linha">
+    <div><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> · ${fmt(g.rolhas)} rolhas (${fmt(g.frascos)} frascos × ${g.rolhasPorFrasco}) · <b>${g.contadeira ? 'vai à contadeira' : 'não vai à contadeira'}</b>${g.rolhasPartidas ? ` · partidas ${fmt(g.rolhasPartidas)}` : ''}</div>
+    ${g.contadeira ? '' : campoNum('misuLig' + i, 'Rolhas de aroma ligeiro', g.ligeiros, entregue)}
+    ${campoNum('misuFor' + i, 'Rolhas de aroma forte', g.fortes, entregue)}
+    ${g.contadeira ? '<div class="dica">Com contadeira o MISU conta só os fortes; os ligeiros são da contadeira.</div>' : '<div class="soma-qv" id="misuApr' + i + '"></div>'}
+  </div>`).join('');
+  abrirFolha(`<h3>Mesa ${m.mesa}</h3>${linhasRolhas(m)}
+    ${entregue ? '<div class="aviso-hand">Mesa entregue à contadeira. A responsabilidade passou para a contadeira e já não pode ser alterada aqui.</div>' : '<div class="aviso-hand">O MISU trabalha à mesa, mas aponta por ordem: o que vai à contadeira só conta fortes; o resto conta ligeiros e fortes.</div>'}
+    ${blocos}
+    ${campoNum('misuQvs', 'QVs · qualidade visual (nº de rolhas)', m.qvs.misu || '', entregue)}
+    ${entregue ? '' : `<button class="primario" id="misuOk">${m.contadeira ? 'Guardar e entregar à contadeira' : 'Guardar'}</button>`}
+    <button class="secundario" id="misuX">Fechar</button>
+    <div class="msg-erro" id="misuErro"></div>`);
+  el('misuX').onclick = fecharFolha;
+  const atualizar = () => segs.forEach((g, i) => {
+    if (g.contadeira || !el('misuApr' + i)) return;
+    const l = lerNum('misuLig' + i) || 0, f = lerNum('misuFor' + i) || 0;
+    el('misuApr' + i).innerHTML = `${fmt(g.rolhas)} − ${fmt(l)} ligeiras − ${fmt(f)} fortes − ${fmt(g.rolhasPartidas)} partidas = <b>${fmt(g.rolhas - l - f - g.rolhasPartidas)} aprovadas</b>`;
+  });
+  segs.forEach((g, i) => { if (el('misuLig' + i)) el('misuLig' + i).oninput = atualizar; el('misuFor' + i).oninput = atualizar; });
+  atualizar();
+  if (entregue) return;
+  el('misuOk').onclick = async () => {
+    el('misuErro').textContent = '';
+    const ordens = {};
+    for (let i = 0; i < segs.length; i++) {
+      const g = segs[i];
+      if (lerNum('misuFor' + i) === undefined || (!g.contadeira && lerNum('misuLig' + i) === undefined)) { el('misuErro').textContent = `Ordem ${g.op}: ${g.contadeira ? 'aponta as rolhas de aroma forte' : 'aponta as rolhas de aroma ligeiro e de aroma forte'} (pode ser 0).`; return; }
+      ordens[g.op] = { ligeiros: g.contadeira ? undefined : lerNum('misuLig' + i), fortes: lerNum('misuFor' + i) };
+    }
+    try { await enviar('/api/misu/' + m.mesa, { ordens, qvs: lerNum('misuQvs') }); fecharFolha(); carregarLogistica(); }
+    catch (e) { el('misuErro').textContent = e.message; }
+  };
+}
 function folhaMisu(m) {
+  if ((m.segmentos || []).length) return folhaMisuOrdens(m);
   const cont = m.contadeira;
   if (cont && m.misuEstado === 'entregue') {
     abrirFolha(`<h3>Mesa ${m.mesa}</h3>${linhasRolhas(m)}
@@ -645,7 +730,15 @@ async function folhaLogistica(codigo) {
   if (!m) return;
   const pronta = m.estadoProva === 'pronta' || m.estadoProva === 'levantada';
   let bloco;
-  if (m.contadeira) {
+  if ((m.segmentos || []).length) {
+    bloco = m.segmentos.map((g) => {
+      if (g.contadeira) {
+        const c = (m.contagensOp || []).find((x) => x.op === g.op);
+        return `OP ${g.op} · contadeira · MISU: ${fmt(g.fortes)} fortes · ` + (c && c.aprovadas !== null ? `aprovadas <b>${fmt(c.aprovadas)}</b> (valor da OP inteira)` : '<b>a aguardar a contadeira</b>');
+      }
+      return g.aprovadas !== null ? `OP ${g.op} · sem contadeira · ${fmt(g.rolhas)} − ${fmt(g.ligeiros)} ligeiras − ${fmt(g.fortes)} fortes − ${fmt(g.rolhasPartidas)} partidas = <b>${fmt(g.aprovadas)}</b> aprovadas` : `OP ${g.op} · sem contadeira · <b>a aguardar o MISU</b>`;
+    }).join('<br/>');
+  } else if (m.contadeira) {
     const linhas = (m.contagensOp || []).map((c) => c.aprovadas !== null
       ? `OP ${c.op}: aprovadas <b>${fmt(c.aprovadas)}</b> (contadeira, valor da OP inteira)`
       : `OP ${c.op}: <b>a aguardar a contadeira</b>`);
@@ -692,20 +785,21 @@ async function folhaEditar(codigo) {
   try { await carregarLevantamento(); m = levDados.find((x) => x.mesa === codigo); } catch (e) { return; }
   if (!m) { abrirFolha(`<h3>Mesa ${codigo}</h3><div class="aviso-hand">Esta mesa não tem lote hoje.</div><button class="secundario" id="edX">Fechar</button>`); el('edX').onclick = fecharFolha; return; }
   const sn = [[1, 'Sim'], [0, 'Não']];
+  const porOrdem = (m.segmentos || []).length > 0;
   const contOp = (m.contagensOp || []).map((c) => campoNum('edOp_' + c.op, `Contadeira · OP ${c.op} · aprovadas`, c.aprovadas)).join('');
   abrirFolha(`<h3>Editar mesa ${m.mesa}</h3>
     <div class="aviso-hand">Modo supervisora: as alterações ficam registadas já.</div>
     ${linhasRolhas(m)}
-    <div class="sheet-campo"><label>Nº de ordem</label><input id="edOrdem" value="${m.ordem || ''}" inputmode="numeric" /></div>
+    ${porOrdem ? htmlEditorOrdens(m) : `    <div class="sheet-campo"><label>Nº de ordem</label><input id="edOrdem" value="${m.ordem || ''}" inputmode="numeric" /></div>
     ${optSel('edTipo', 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], m.tipo)}
     ${optSel('edRolhas', 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], m.rolhasPorFrasco)}
     ${campoNum('edTotal', 'Total de frascos/cliente', m.totalFrascos)}
     ${optSel('edCont', 'Contadeira', sn, m.contadeira ? 1 : 0)}
     ${optSel('edDsrol', 'DSROL', sn, m.dsrol ? 1 : 0)}
     ${campoNum('edPartidos', 'Frascos partidos', m.frascosPartidos)}
-    ${campoNum('edQvCol', 'QVs da colocação (nº de rolhas)', m.qvs.colocacao)}
-    ${m.contadeira ? '' : campoNum('edLig', 'MISU · aromas ligeiros', m.ligeiros)}
-    ${campoNum('edFor', 'MISU · aromas fortes', m.fortes)}
+    ${campoNum('edQvCol', 'QVs da colocação (nº de rolhas)', m.qvs.colocacao)}`}
+    ${porOrdem ? (m.segmentos || []).map((g, i) => `<div class="prop-linha"><b>OP ${g.op}</b> · ${g.contadeira ? 'contadeira' : 'sem contadeira'}${g.contadeira ? '' : campoNum('edLigO' + i, 'MISU · aromas ligeiros', g.ligeiros)}${campoNum('edForO' + i, 'MISU · aromas fortes', g.fortes)}</div>`).join('') : `${m.contadeira ? '' : campoNum('edLig', 'MISU · aromas ligeiros', m.ligeiros)}
+    ${campoNum('edFor', 'MISU · aromas fortes', m.fortes)}`}
     ${campoNum('edQvMisu', 'MISU · QVs (nº de rolhas)', m.qvs.misu)}
     ${campoNum('edQvLog', 'Logística · QVs (nº de rolhas)', m.qvs.logistica)}
     ${contOp}
@@ -714,12 +808,14 @@ async function folhaEditar(codigo) {
     <button class="secundario" id="edX">Fechar</button>
     <div class="msg-erro" id="edErro"></div>`);
   el('edX').onclick = fecharFolha;
+  if (porOrdem) ligarEditorOrdens(m, isoLocal(new Date()), () => folhaEditar(codigo));
   el('edGuardar').onclick = async () => {
     el('edErro').textContent = '';
-    const corpo = { pin: pinSessao, ordem: el('edOrdem').value.trim(), tipo: el('edTipo').value, rolhasPorFrasco: Number(el('edRolhas').value),
-      totalFrascosCliente: lerNum('edTotal'), contadeira: el('edCont').value === '1', dsrol: el('edDsrol').value === '1',
-      frascosPartidos: lerNum('edPartidos') ?? 0, qvsColocacao: lerNum('edQvCol') ?? 0,
-      misu: { ligeiros: el('edLig') ? lerNum('edLig') : undefined, fortes: lerNum('edFor'), qvs: lerNum('edQvMisu') }, logQvs: lerNum('edQvLog'), contagens: {} };
+    const corpo = { pin: pinSessao,
+      ...(porOrdem ? {} : { ordem: el('edOrdem').value.trim(), tipo: el('edTipo').value, rolhasPorFrasco: Number(el('edRolhas').value),
+        totalFrascosCliente: lerNum('edTotal'), contadeira: el('edCont').value === '1', dsrol: el('edDsrol').value === '1',
+        frascosPartidos: lerNum('edPartidos') ?? 0, qvsColocacao: lerNum('edQvCol') ?? 0 }),
+      ...(porOrdem ? { misuOrdens: Object.fromEntries((m.segmentos || []).map((g, i) => [g.op, { ligeiros: el('edLigO' + i) ? lerNum('edLigO' + i) : undefined, fortes: lerNum('edForO' + i) }])), misu: { qvs: lerNum('edQvMisu') } } : { misu: { ligeiros: el('edLig') ? lerNum('edLig') : undefined, fortes: lerNum('edFor'), qvs: lerNum('edQvMisu') } }), logQvs: lerNum('edQvLog'), contagens: {} };
     (m.contagensOp || []).forEach((c) => { const v = lerNum('edOp_' + c.op); if (v !== undefined) corpo.contagens[c.op] = v; });
     try { await enviar('/api/supervisora/mesa/' + m.mesa, corpo); fecharFolha(); carregarLogistica(); }
     catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }
@@ -730,6 +826,114 @@ async function folhaEditar(codigo) {
     catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }
   };
 }
+// ----- Editor de ordens (colocação) de uma mesa: hoje ou amanhã -----
+function htmlEditorOrdens(m) {
+  const sn = [[1, 'Sim'], [0, 'Não']];
+  return (m.segmentos || []).map((g, i) => `<div class="prop-linha"><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> (frascos ${g.de}–${g.ate})
+    <div class="sheet-campo"><label>Nº de ordem</label><input id="eoOp${i}" value="${esc(g.op)}" inputmode="numeric" autocomplete="off" /></div>
+    ${campoNum('eoFr' + i, 'Frascos da ordem', g.frascos)}
+    ${optSel('eoRol' + i, 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], g.rolhasPorFrasco)}
+    ${campoNum('eoPart' + i, 'Frascos partidos', g.frascosPartidos)}
+    ${campoNum('eoQv' + i, 'QVs da colocação (nº de rolhas)', g.qvs)}
+    ${optSel('eoTipo' + i, 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
+    ${optSel('eoCont' + i, 'Contadeira', sn, g.contadeira ? 1 : 0)}
+    ${optSel('eoDsrol' + i, 'DSROL', sn, g.dsrol ? 1 : 0)}
+    <button class="secundario" id="eoSave${i}">Guardar esta ordem</button></div>`).join('');
+}
+function ligarEditorOrdens(m, data, recarregar) {
+  (m.segmentos || []).forEach((g, i) => {
+    el('eoSave' + i).onclick = async () => {
+      el('edErro').textContent = '';
+      try {
+        await enviar('/api/supervisora/ordem', { pin: pinSessao, data, mesa: m.mesa, op: g.op, novaOrdem: el('eoOp' + i).value.trim(),
+          frascos: lerNum('eoFr' + i), rolhasPorFrasco: Number(el('eoRol' + i).value), frascosPartidos: lerNum('eoPart' + i) ?? 0, qvs: lerNum('eoQv' + i) ?? 0,
+          tipo: el('eoTipo' + i).value, contadeira: el('eoCont' + i).value === '1', dsrol: el('eoDsrol' + i).value === '1' });
+        carregarLogistica(); recarregar();
+      } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }
+    };
+  });
+}
+async function folhaEditarAmanha(codigo) {
+  const m = logDados.mesas.find((x) => x.mesa === codigo);
+  if (!m) return;
+  const data = dataLogistica();
+  if (!(m.segmentos || []).length) {
+    abrirFolha(`<h3>Mesa ${codigo} · amanhã</h3><div class="aviso-hand">Sem ordens colocadas. Coloca-as no separador Colocar.</div><button class="secundario" id="edX">Fechar</button>`);
+    el('edX').onclick = fecharFolha; return;
+  }
+  abrirFolha(`<h3>Editar mesa ${codigo} · amanhã</h3>
+    <div class="aviso-hand">Modo supervisora: as alterações ficam registadas já.</div>
+    ${htmlEditorOrdens(m)}
+    <button class="secundario" id="edX">Fechar</button>
+    <div class="msg-erro" id="edErro"></div>`);
+  el('edX').onclick = fecharFolha;
+  ligarEditorOrdens(m, data, async () => { await carregarLogistica(); folhaEditarAmanha(codigo); });
+}
+
+// ----- Provadores: lista de nomes -----
+async function folhaProvadores(lista) {
+  try { if (!lista) lista = (await enviar('/api/supervisora/provadores', { pin: pinSessao, acao: 'listar' })).provadores; }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  abrirFolha(`<h3>Provadores</h3>
+    <div class="sheet-campo"><label>Novo provador</label><input id="pvNovo" placeholder="Nome completo" autocomplete="off" /></div>
+    <button class="primario" id="pvAdd" style="margin-top:0;">Adicionar</button>
+    ${lista.map((p) => `<div class="prop-linha" style="${p.ativo ? '' : 'opacity:.6;'}"><div><b>${esc(p.nome)}</b>${p.ativo ? '' : ' · desativado'}</div>
+      <div class="prop-campos"><button class="secundario" data-a="renomear" data-id="${p.id}" data-nome="${esc(p.nome)}">Renomear</button>
+      <button class="secundario" data-a="${p.ativo ? 'desativar' : 'ativar'}" data-id="${p.id}">${p.ativo ? 'Tirar da lista' : 'Voltar à lista'}</button></div></div>`).join('')}
+    <button class="secundario" id="pvX">Fechar</button>
+    <div class="msg-erro" id="pvErro"></div>`);
+  el('pvX').onclick = fecharFolha;
+  const agir = async (corpo) => {
+    el('pvErro').textContent = '';
+    try { const r = await enviar('/api/supervisora/provadores', { pin: pinSessao, ...corpo }); folhaProvadores(r.provadores); }
+    catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('pvErro').textContent = e.message; }
+  };
+  el('pvAdd').onclick = () => agir({ acao: 'adicionar', nome: el('pvNovo').value });
+  el('sheetBox').querySelectorAll('button[data-a]').forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.a === 'renomear') { const n = prompt('Novo nome:', b.dataset.nome); if (n !== null) agir({ acao: 'renomear', id: Number(b.dataset.id), nome: n }); }
+      else agir({ acao: b.dataset.a, id: Number(b.dataset.id) });
+    };
+  });
+}
+
+// ----- Provas de uma mesa: editar ou apagar o que um provador registou -----
+async function folhaProvasMesa(codigo) {
+  let regs, aprov;
+  try {
+    regs = (await enviar('/api/supervisora/registos', { pin: pinSessao, mesa: codigo })).registos;
+    aprov = await (await fetch('/api/aprovadores')).json();
+  } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('erroLog').textContent = e.message; return; }
+  const nomes = aprov.map((a) => a.nome);
+  abrirFolha(`<h3>Provas · mesa ${codigo} · hoje</h3>
+    ${regs.length ? regs.map((r) => {
+      const lst = nomes.includes(r.aprovador) ? nomes : [r.aprovador, ...nomes];
+      return `<div class="prop-linha"><b>${esc(r.aprovador)}</b> · ${r.estado}
+        ${optSel('rgAp' + r.id, 'Provador', lst.map((n) => [n, n]), r.aprovador)}
+        <div class="prop-campos"><label>Abertura<input type="time" id="rgA${r.id}" value="${r.abertura || ''}" /></label><label>Fecho<input type="time" id="rgF${r.id}" value="${r.fecho || ''}" /></label></div>
+        ${optSel('rgEs' + r.id, 'Estado', [['Aberto', 'Aberto'], ['Fechado', 'Fechado']], r.estado)}
+        <div class="prop-campos"><button class="secundario" data-g="${r.id}">Guardar</button><button class="secundario" data-d="${r.id}">Apagar prova</button></div></div>`;
+    }).join('') : '<div class="aviso-hand">Ainda não há provas registadas nesta mesa hoje.</div>'}
+    <button class="secundario" id="rgX">Fechar</button>
+    <div class="msg-erro" id="rgErro"></div>`);
+  el('rgX').onclick = fecharFolha;
+  const erro = (e) => { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('rgErro').textContent = e.message; };
+  el('sheetBox').querySelectorAll('button[data-g]').forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.g; el('rgErro').textContent = '';
+      try { await enviar('/api/supervisora/registo/' + id, { pin: pinSessao, acao: 'editar', aprovador: el('rgAp' + id).value, estado: el('rgEs' + id).value, abertura: el('rgA' + id).value, fecho: el('rgF' + id).value || null }); carregarLogistica(); folhaProvasMesa(codigo); }
+      catch (e) { erro(e); }
+    };
+  });
+  el('sheetBox').querySelectorAll('button[data-d]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Apagar esta prova? Deixa de contar para a mesa.')) return;
+      try { await enviar('/api/supervisora/registo/' + b.dataset.d, { pin: pinSessao, acao: 'apagar' }); carregarLogistica(); folhaProvasMesa(codigo); }
+      catch (e) { erro(e); }
+    };
+  });
+}
+
 // Mapa vermelho/verde: vermelho = vez do MISU (contaminados à frente); verde = vez da logística (rolhas OK)
 async function abrirMesaMapa(codigo) {
   const m = logDados.mesas.find((x) => x.mesa === codigo);

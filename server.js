@@ -7,6 +7,49 @@ const plan = require('./planeamento');
 
 const app = express();
 app.use(express.json());
+
+// --- Histórico: guarda TODOS os movimentos (escritas) da aplicação na tabela `movimentos` ---
+const ACOES = [
+  [/^\/api\/mesa\/([^/]+)\/abrir$/, 'prova_aberta'],
+  [/^\/api\/registo\/(\d+)\/concluir$/, 'prova_concluida'],
+  [/^\/api\/logistica\/colocar$/, 'colocacao_mesas'],
+  [/^\/api\/logistica\/remover$/, 'remocao_mesas'],
+  [/^\/api\/logistica\/levantar$/, 'levantamento_mesa'],
+  [/^\/api\/logistica\/qvs\/([^/]+)$/, 'qvs_logistica'],
+  [/^\/api\/misu\/([^/]+)$/, 'misu'],
+  [/^\/api\/contadeira\/op\/([^/]+)$/, 'contadeira'],
+  [/^\/api\/supervisora\/mesa\/([^/]+)$/, 'edicao_supervisora'],
+  [/^\/api\/supervisora\/reset$/, 'limpeza_dados_teste'],
+  [/^\/api\/supervisora\/provadores$/, 'edicao_provadores'],
+  [/^\/api\/supervisora\/registo\/(\d+)$/, 'edicao_prova_mesa'],
+  [/^\/api\/supervisora\/ordem$/, 'edicao_ordem'],
+  [/^\/api\/logistica\/ordem\/confirmar$/, 'colocacao_ordem'],
+  [/^\/api\/logistica\/ordem\/remover$/, 'remocao_ordem'],
+  [/^\/api\/lotes$/, 'lote_manual'],
+  [/^\/api\/planeamento\/confirmar$/, 'planeamento_confirmado'],
+];
+const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
+app.use((req, res, next) => {
+  if (req.method !== 'POST' || !req.path.startsWith('/api/')) return next();
+  const alvo = ACOES.find(([re]) => re.test(req.path));
+  if (!alvo) return next();
+  let resposta = null;
+  const j = res.json.bind(res);
+  res.json = (o) => { resposta = o; return j(o); };
+  res.on('finish', () => {
+    const b = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {};
+    const g = req.path.match(alvo[0]) || [];
+    const mesa = b.mesa || (Array.isArray(b.mesas) ? b.mesas.join(',') : null) || (['misu', 'qvs_logistica', 'edicao_supervisora'].includes(alvo[1]) ? g[1] : null) || (alvo[1] === 'prova_aberta' ? g[1] : null);
+    const op = b.ordem || (alvo[1] === 'contadeira' ? g[1] : null);
+    const quem = b.aprovador || b.nome || (b.pin ? 'supervisora' : null);
+    pool.query(
+      `INSERT INTO movimentos (acao, mesa, op, utilizador, metodo, caminho, status, ip, pedido, resposta) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [alvo[1], mesa ? String(mesa).slice(0, 200) : null, op ? String(op).slice(0, 100) : null, quem, req.method, req.path, res.statusCode, req.ip || null,
+        SEM_PIN(b), resposta ? JSON.stringify(resposta).slice(0, 4000) : null]
+    ).catch((e) => console.error('Falha a guardar movimento:', e.message));
+  });
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Aprovadores ---
@@ -207,7 +250,7 @@ app.get('/api/logistica/mesas', async (req, res) => {
   try {
     const data = req.query.data || plan.hojeLisboa();
     const lotes = await pool.query(
-      `SELECT mesa, ordem, numero_provadores, levantada_em, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, misu_ligeiros, misu_fortes FROM lotes
+      `SELECT mesa, ordem, numero_provadores, levantada_em, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, misu_ligeiros, misu_fortes, total_rolhas, rolhas_partidas_total FROM lotes
        WHERE data_planeamento = $1 AND ativo = true`, [data]);
     const lado = data === plan.hojeLisboa() ? await ladoHoje() : plan.ladoDoDia(data);
     const feitos = await pool.query(
@@ -218,6 +261,10 @@ app.get('/api/logistica/mesas', async (req, res) => {
     const nFeitos = new Map(feitos.rows.map((r) => [r.mesa, r.n]));
     const emAnalise = new Set(abertos.rows.map((r) => r.mesa));
     const porMesa = new Map(lotes.rows.map((l) => [l.mesa, l]));
+    const sgs = await pool.query(`SELECT * FROM lote_ops WHERE data = $1 ORDER BY de`, [data]);
+    const sgPorMesa = new Map();
+    sgs.rows.forEach((s) => { if (!sgPorMesa.has(s.mesa)) sgPorMesa.set(s.mesa, []); sgPorMesa.get(s.mesa).push(segFormatado(s)); });
+    lotes.rows.forEach((l) => { l._segs = sgPorMesa.get(l.mesa) || []; });
     const mesas = [];
     for (let i = 1; i <= plan.MESAS[lado]; i++) {
       const codigo = lado + i;
@@ -239,6 +286,8 @@ app.get('/api/logistica/mesas', async (req, res) => {
         contadeira: l ? l.contadeira : null, qvs: l ? l.qvs_colocacao : null,
         tipo: l ? l.tipo : null, dsrol: l ? l.dsrol : null, frascosPartidos: l ? l.frascos_partidos : null,
         totalRolhas: l ? derivar(l).totalRolhas : null, rolhasPartidas: l ? derivar(l).rolhasPartidas : null,
+        capacidade: plan.LAYOUT[lado].cap[String(i)] || 0, ocupado: Math.max(0, ...(sgPorMesa.get(codigo) || []).map((s) => s.ate)),
+        segmentos: sgPorMesa.get(codigo) || [],
       });
     }
     res.json({ data, lado, mesas, filas: plan.LAYOUT[lado].filas });
@@ -253,7 +302,8 @@ app.get('/api/logistica/mesas', async (req, res) => {
 // Devolve null se confere (ou ainda não há dados para comparar), ou o texto do desvio.
 function desvioColocacao(m, ops) {
   if (!m.contadeira) return null; // sem contadeira: aprovadas = total − contaminadas − partidas, confere por construção
-  for (const op of m.ops) {
+  const opsCont = (m.segmentos || []).length ? m.segmentos.filter((s) => s.contadeira).map((s) => s.op) : m.ops;
+  for (const op of opsCont) {
     const o = ops.find((x) => x.op === op);
     if (!o) continue;
     if (o.aprovadas === null) return `A contadeira ainda não contou a OP ${op}.`;
@@ -281,10 +331,10 @@ app.post('/api/logistica/levantar', async (req, res) => {
         const contagens = await contagensDeHoje();
         const ms = lista.map((x) => formatarLote(x, contagens));
         const mm = ms.find((x) => x.mesa === mesa);
+        if (mm && mm.misuEstado === 'pendente') return res.status(409).json({ erro: 'Os contaminados andam sempre à frente: o MISU ainda não levantou os contaminados desta mesa.' });
         const desvio = mm && desvioColocacao(mm, agregarOps(ms, contagens));
         if (desvio) return res.status(409).json({ erro: desvio });
       }
-      if (derivar(l.rows[0]).misuEstado === 'pendente') return res.status(409).json({ erro: 'Os contaminados andam sempre à frente: o MISU ainda não levantou os contaminados desta mesa.' });
     }
     await pool.query(
       `UPDATE lotes SET levantada_em = ${desfazer ? 'NULL' : 'now()'} WHERE mesa = $1 AND data_planeamento = $2`, [mesa, data]);
@@ -369,6 +419,133 @@ app.post('/api/logistica/colocar', async (req, res) => {
   }
 });
 
+// ===================== Colocação POR ORDEM (várias ordens podem partilhar uma mesa) =====================
+const { alocar } = require('./colocacao');
+
+async function recalcularLote(client, data, mesa) {
+  const r = await client.query(`SELECT * FROM lote_ops WHERE data = $1 AND mesa = $2 ORDER BY de`, [data, mesa]);
+  if (!r.rowCount) {
+    await client.query(`DELETE FROM lotes WHERE data_planeamento = $1 AND mesa = $2`, [data, mesa]);
+    return;
+  }
+  const g = r.rows;
+  const soma = (f) => g.reduce((t, x) => t + f(x), 0);
+  const rolhas = [...new Set(g.map((x) => x.rolhas_por_frasco))];
+  const amostra = g.some((x) => x.tipo === 'AMOSTRA');
+  await client.query(
+    `INSERT INTO lotes (mesa, ordem, data_planeamento, numero_provadores, ativo, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, total_rolhas, rolhas_partidas_total)
+     VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (mesa, data_planeamento) DO UPDATE SET ordem = EXCLUDED.ordem, ativo = true, numero_provadores = EXCLUDED.numero_provadores,
+       rolhas_por_frasco = EXCLUDED.rolhas_por_frasco, total_frascos_cliente = EXCLUDED.total_frascos_cliente, contadeira = EXCLUDED.contadeira,
+       qvs_colocacao = EXCLUDED.qvs_colocacao, tipo = EXCLUDED.tipo, dsrol = EXCLUDED.dsrol, frascos_partidos = EXCLUDED.frascos_partidos,
+       total_rolhas = EXCLUDED.total_rolhas, rolhas_partidas_total = EXCLUDED.rolhas_partidas_total`,
+    [mesa, g.map((x) => x.op).join(' + '), data, amostra ? 3 : 2, Math.max(...rolhas), soma((x) => x.frascos), g.some((x) => x.contadeira),
+      soma((x) => x.qvs), amostra ? 'AMOSTRA' : g[0].tipo, g.some((x) => x.dsrol), soma((x) => x.frascos_partidos),
+      soma((x) => x.frascos * x.rolhas_por_frasco), soma((x) => x.frascos_partidos * x.rolhas_por_frasco)]);
+}
+
+// valida o dia (mesma regra da colocação por mesas): amanhã é livre; hoje (a meio do processo) só com a palavra-passe da supervisora
+async function contextoColocacao(req, res) {
+  const b = req.body || {};
+  const supervisora = b.pin !== undefined && b.pin !== null && b.pin !== '';
+  if (supervisora && !verificarPin(req, res)) return null;
+  const hoje = plan.hojeLisboa();
+  const data = b.data;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data || '')) { res.status(400).json({ erro: 'Data inválida.' }); return null; }
+  if (new Date(data + 'T00:00:00Z').getUTCDay() % 6 === 0) { res.status(400).json({ erro: 'Escolhe um dia útil (segunda a sexta).' }); return null; }
+  if (data < hoje) { res.status(400).json({ erro: 'Não é possível colocar para uma data passada.' }); return null; }
+  if (data === hoje && !supervisora) { res.status(401).json({ erro: 'Alterar as mesas de hoje (a meio do processo) só com a palavra-passe da supervisora.' }); return null; }
+  if (data !== plan.diaUtilSeguinte(hoje) && !(supervisora && data === hoje)) { res.status(400).json({ erro: `A data da prova é sempre o dia útil seguinte (${plan.diaUtilSeguinte(hoje)}).` }); return null; }
+  const lado = data === hoje ? await ladoHoje() : plan.ladoDoDia(data);
+  return { data, hoje, lado };
+}
+function lerOrdem(b, res) {
+  const op = String(b.ordem || '').trim();
+  if (!/^\d{6,12}$/.test(op) || !PREFIXOS_OP.some((p) => op.startsWith(p))) { res.status(400).json({ erro: 'Nº de ordem inválido: tem de ser só números e começar por 150, 151 ou 950.' }); return null; }
+  if (![1, 2, 4].includes(Number(b.rolhasPorFrasco))) { res.status(400).json({ erro: 'Rolhas por frasco: escolhe 1, 2 ou 4.' }); return null; }
+  const frascos = Number(b.frascos);
+  if (!Number.isInteger(frascos) || frascos < 1) { res.status(400).json({ erro: 'Indica a quantidade de frascos da ordem.' }); return null; }
+  return { op, frascos, rolhas: Number(b.rolhasPorFrasco) };
+}
+async function planoDaOrdem(data, lado, op, frascos) {
+  const ja = await pool.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2 LIMIT 1`, [data, op]);
+  if (ja.rowCount) return { erro: `A ordem ${op} já está colocada neste dia. Tira-a primeiro para a colocar de novo.` };
+  const oc = await pool.query(`SELECT mesa, MAX(ate)::int AS ate FROM lote_ops WHERE data = $1 GROUP BY mesa`, [data]);
+  const ocupacao = new Map(oc.rows.filter((r) => r.mesa[0] === lado).map((r) => [Number(r.mesa.slice(1)), r.ate]));
+  const a = alocar(lado, ocupacao, frascos);
+  return a;
+}
+app.post('/api/logistica/ordem/proposta', async (req, res) => {
+  try {
+    const ctx = await contextoColocacao(req, res); if (!ctx) return;
+    const o = lerOrdem(req.body || {}, res); if (!o) return;
+    const a = await planoDaOrdem(ctx.data, ctx.lado, o.op, o.frascos);
+    if (a.erro) return res.status(409).json({ erro: a.erro });
+    // identificação da ordem na mesa: A7-1, A7-2, ... (a mesa vai ter mais do que uma ordem quando já tem alguma)
+    const ja = await pool.query(`SELECT mesa, COUNT(*)::int AS n, COALESCE(MAX(seq), COUNT(*))::int AS m FROM lote_ops WHERE data = $1 GROUP BY mesa`, [ctx.data]);
+    const jaPor = new Map(ja.rows.map((x) => [x.mesa, x]));
+    res.json({ lado: ctx.lado, data: ctx.data, op: o.op, frascos: o.frascos, rolhasPorFrasco: o.rolhas, totalRolhas: o.frascos * o.rolhas,
+      semCapacidade: a.semCapacidade, segmentos: a.segmentos.map((s) => ({ ...s, rolhas: s.frascos * o.rolhas, seq: (jaPor.get(s.mesa)?.m || 0) + 1, jaTem: jaPor.get(s.mesa)?.n || 0 })) });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao calcular as mesas.' }); }
+});
+app.post('/api/logistica/ordem/confirmar', async (req, res) => {
+  try {
+    const ctx = await contextoColocacao(req, res); if (!ctx) return;
+    const b = req.body || {};
+    const o = lerOrdem(b, res); if (!o) return;
+    if (!['EUR', 'GRUPO', 'AMOSTRA'].includes(String(b.tipo))) return res.status(400).json({ erro: 'Escolhe o tipo: EUR, GRUPO ou AMOSTRA.' });
+    if (typeof b.contadeira !== 'boolean') return res.status(400).json({ erro: 'Indica se tem contadeira (sim ou não).' });
+    if (typeof b.dsrol !== 'boolean') return res.status(400).json({ erro: 'Indica DSROL (sim ou não).' });
+    const a = await planoDaOrdem(ctx.data, ctx.lado, o.op, o.frascos);
+    if (a.erro) return res.status(409).json({ erro: a.erro });
+    if (a.semCapacidade > 0) return res.status(400).json({ erro: `Não há mesas livres suficientes no lado ${ctx.lado}: faltam espaço para ${a.semCapacidade} frascos.` });
+    // frascos partidos e QVs por mesa (a logística indica-os na proposta)
+    const dist = new Map((Array.isArray(b.distribuicao) ? b.distribuicao : []).map((d) => [String(d.mesa).toUpperCase(), d]));
+    for (const s of a.segmentos) {
+      const d = dist.get(s.mesa) || {};
+      const part = d.partidos === undefined || d.partidos === '' || d.partidos === null ? 0 : Number(d.partidos);
+      const qv = d.qvs === undefined || d.qvs === '' || d.qvs === null ? 0 : Number(d.qvs);
+      if (!Number.isInteger(part) || part < 0 || part > s.frascos) return res.status(400).json({ erro: `Frascos partidos da mesa ${s.mesa}: número inteiro entre 0 e ${s.frascos}.` });
+      if (!Number.isInteger(qv) || qv < 0) return res.status(400).json({ erro: `QVs da mesa ${s.mesa}: número inteiro (0 ou mais).` });
+      s.partidos = part; s.qvs = qv;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const s of a.segmentos) {
+        await client.query(
+          `INSERT INTO lote_ops (data, mesa, op, de, ate, frascos, rolhas_por_frasco, frascos_partidos, qvs, contadeira, tipo, dsrol, seq)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, COALESCE((SELECT MAX(seq) FROM lote_ops WHERE data = $1 AND mesa = $2), (SELECT COUNT(*) FROM lote_ops WHERE data = $1 AND mesa = $2)) + 1)`,
+          [ctx.data, s.mesa, o.op, s.de, s.ate, s.frascos, o.rolhas, s.partidos, s.qvs, b.contadeira, b.tipo, b.dsrol]);
+        await recalcularLote(client, ctx.data, s.mesa);
+      }
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    res.json({ ok: true, op: o.op, mesas: a.segmentos.map((s) => s.mesa) });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao registar a ordem.' }); }
+});
+app.post('/api/logistica/ordem/remover', async (req, res) => {
+  try {
+    const ctx = await contextoColocacao(req, res); if (!ctx) return;
+    const op = String((req.body || {}).ordem || '').trim();
+    const r = await pool.query(`SELECT mesa FROM lote_ops WHERE data = $1 AND op = $2`, [ctx.data, op]);
+    if (!r.rowCount) return res.status(404).json({ erro: 'Esta ordem não está colocada neste dia.' });
+    const mesas = r.rows.map((x) => x.mesa);
+    if (ctx.data === ctx.hoje) {
+      const pr = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= CURRENT_DATE LIMIT 1`, [mesas]);
+      if (pr.rowCount) return res.status(409).json({ erro: 'Já há provas registadas nestas mesas hoje.' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM lote_ops WHERE data = $1 AND op = $2`, [ctx.data, op]);
+      for (const m of mesas) await recalcularLote(client, ctx.data, m);
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    res.json({ ok: true, mesas });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao remover a ordem.' }); }
+});
+
 // --- Logística: tirar mesas colocadas por engano (só dias futuros, ou hoje sem provas) ---
 app.post('/api/logistica/remover', async (req, res) => {
   try {
@@ -383,6 +560,7 @@ app.post('/api/logistica/remover', async (req, res) => {
       const r = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= CURRENT_DATE LIMIT 1`, [mesas.map((m) => String(m).toUpperCase())]);
       if (r.rowCount) return res.status(409).json({ erro: 'Já há provas registadas nestas mesas hoje.' });
     }
+    await pool.query(`DELETE FROM lote_ops WHERE data = $1 AND mesa = ANY($2)`, [data, mesas.map((m) => String(m).toUpperCase())]);
     await pool.query(`DELETE FROM lotes WHERE data_planeamento = $1 AND mesa = ANY($2)`, [data, mesas.map((m) => String(m).toUpperCase())]);
     res.json({ ok: true });
   } catch (err) {
@@ -393,9 +571,18 @@ app.post('/api/logistica/remover', async (req, res) => {
 
 // ===================== Levantamento: MISU, Contadeira, Logística =====================
 // Lista os lotes de hoje com o estado das provas e os valores já apontados (e os derivados).
+function segFormatado(s) {
+  return { op: s.op, seq: s.seq || null, de: s.de, ate: s.ate, frascos: s.frascos, rolhasPorFrasco: s.rolhas_por_frasco, rolhas: s.frascos * s.rolhas_por_frasco,
+    frascosPartidos: s.frascos_partidos, rolhasPartidas: s.frascos_partidos * s.rolhas_por_frasco, qvs: s.qvs,
+    ligeiros: s.misu_ligeiros === null || s.misu_ligeiros === undefined ? null : s.misu_ligeiros, fortes: s.misu_fortes === null || s.misu_fortes === undefined ? null : s.misu_fortes, contadeira: s.contadeira, tipo: s.tipo, dsrol: s.dsrol };
+}
 async function lotesDeHoje() {
   const hoje = plan.hojeLisboa();
   const lotes = await pool.query(`SELECT * FROM lotes WHERE data_planeamento = $1 AND ativo = true`, [hoje]);
+  const sgs = await pool.query(`SELECT * FROM lote_ops WHERE data = $1 ORDER BY de`, [hoje]);
+  const segsPorMesa = new Map();
+  sgs.rows.forEach((s) => { if (!segsPorMesa.has(s.mesa)) segsPorMesa.set(s.mesa, []); segsPorMesa.get(s.mesa).push(segFormatado(s)); });
+  lotes.rows.forEach((l) => { l._segs = segsPorMesa.get(l.mesa) || []; });
   const feitos = await pool.query(
     `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
      WHERE estado = 'Fechado' AND hora_fecho >= CURRENT_DATE AND hora_fecho < CURRENT_DATE + 1 GROUP BY mesa`);
@@ -421,12 +608,13 @@ function formatarLote({ l, f, estadoProva }, contagens) {
   const d = derivar(l);
   const m = {
     mesa: l.mesa, ordem: l.ordem, tipo: l.tipo, dsrol: l.dsrol, estadoProva,
-    feitos: f, necessarios: l.numero_provadores, ...d, misuEm: l.misu_em, logEm: l.log_em, ops: opsDoLote(l.ordem),
+    feitos: f, necessarios: l.numero_provadores, segmentos: l._segs || [], ...d, misuEm: l.misu_em, logEm: l.log_em, ops: opsDoLote(l.ordem),
     fase: estadoProva === 'levantada' ? 'levantada' : estadoProva !== 'pronta' ? 'em_prova' : d.misuEstado === 'pendente' ? 'misu' : 'logistica',
   };
-  if (l.contadeira === true) {
-    // contagem da contadeira, por OP (é o valor da OP inteira, não da mesa)
-    m.contagensOp = m.ops.map((op) => {
+  if (d.contadeira) {
+    // contagem da contadeira, por OP (é o valor da OP inteira, não da mesa); na colocação por ordem, só as ordens com contadeira
+    const opsCont = (l._segs || []).length ? l._segs.filter((s) => s.contadeira).map((s) => s.op) : m.ops;
+    m.contagensOp = opsCont.map((op) => {
       const c = (contagens && contagens.get(op)) || {};
       return { op, aprovadas: c.aprovadas ?? null };
     });
@@ -460,12 +648,44 @@ async function carregarPronta(mesa, res, permitirLevantada) {
   return x.l;
 }
 
+async function misuPorOrdem(l, req, res) {
+  const d = derivar(l);
+  const qvs = inteiro(req.body.qvs);
+  if (invalido(qvs)) return res.status(400).json({ erro: 'Indica números inteiros (0 ou mais).' });
+  // cut off: depois de entregue à contadeira (mesa com ordens da contadeira), o MISU já não mexe na mesa
+  if (d.contadeira && d.misuEstado !== 'pendente') return res.status(409).json({ erro: 'Esta mesa já foi entregue à contadeira. A responsabilidade passou para a contadeira.' });
+  const por = req.body.ordens && typeof req.body.ordens === 'object' ? req.body.ordens : {};
+  const novos = [];
+  for (const s of l._segs) {
+    const x = por[s.op] || {};
+    const lig = inteiro(x.ligeiros), fort = inteiro(x.fortes);
+    if (invalido(lig) || invalido(fort)) return res.status(400).json({ erro: 'Indica números inteiros (0 ou mais).' });
+    if (fort === undefined) return res.status(400).json({ erro: `Ordem ${s.op}: aponta as rolhas de aroma forte.` });
+    if (!s.contadeira && lig === undefined) return res.status(400).json({ erro: `Ordem ${s.op} (sem contadeira): aponta as rolhas de aroma ligeiro e de aroma forte.` });
+    const l2 = s.contadeira ? 0 : lig;
+    if (l2 + fort + s.rolhasPartidas > s.rolhas) return res.status(400).json({ erro: `Ordem ${s.op}: ligeiras + fortes (${l2 + fort}) + partidas (${s.rolhasPartidas}) é mais do que as ${s.rolhas} rolhas da ordem.` });
+    novos.push([s.op, l2, fort]);
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [op, lg, ft] of novos) await client.query(`UPDATE lote_ops SET misu_ligeiros = $1, misu_fortes = $2 WHERE data = $3 AND mesa = $4 AND op = $5`, [lg, ft, plan.hojeLisboa(), l.mesa, op]);
+    await client.query(`UPDATE lotes SET misu_ligeiros = $1, misu_fortes = $2, misu_qvs = $3, misu_em = now() WHERE id = $4`,
+      [novos.reduce((t, n) => t + n[1], 0), novos.reduce((t, n) => t + n[2], 0), qvs ?? 0, l.id]);
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+  const x = (await lotesDeHoje()).find((i) => i.l.id === l.id);
+  res.json({ ok: true, mesa: formatarLote(x, await contagensDeHoje()) });
+}
+
 // MISU: levanta os frascos dos contaminados (aroma ligeiro e forte) e aponta as rolhas.
 // Se a mesa vai à contadeira, só aponta as QVs e passa a responsabilidade (hand off) à contadeira.
 app.post('/api/misu/:mesa', async (req, res) => {
   try {
     const l = await carregarPronta(req.params.mesa, res, true);
     if (!l) return;
+    // colocação por ordem: o MISU aponta POR ORDEM dentro da mesa (a mesa continua a ser a unidade de trabalho)
+    if ((l._segs || []).length) return misuPorOrdem(l, req, res);
     let lig = inteiro(req.body.ligeiros); const fort = inteiro(req.body.fortes), qvs = inteiro(req.body.qvs);
     if (invalido(lig) || invalido(fort) || invalido(qvs)) return res.status(400).json({ erro: 'Indica números inteiros (0 ou mais).' });
     const d = derivar(l);
@@ -488,16 +708,18 @@ app.post('/api/misu/:mesa', async (req, res) => {
 app.post('/api/contadeira/op/:op', async (req, res) => {
   try {
     const op = String(req.params.op).trim();
-    const lista = (await lotesDeHoje()).filter((x) => x.l.contadeira === true && opsDoLote(x.l.ordem).includes(op));
-    if (!lista.length) return res.status(404).json({ erro: 'Esta OP não tem mesas que vão à contadeira hoje.' });
+    const todas = await lotesDeHoje();
+    const contagens0 = await contagensDeHoje();
+    const fl = todas.map((x) => formatarLote(x, contagens0));
+    const ag = agregarOps(fl, contagens0).find((o) => o.op === op);     // por ordem: só as mesas/ordens que vão à contadeira
+    if (!ag) return res.status(404).json({ erro: 'Esta OP não tem mesas que vão à contadeira hoje.' });
+    const lista = todas.filter((x) => ag.mesas.includes(x.l.mesa));
     if (lista.some((x) => x.estadoProva === 'em_prova')) return res.status(409).json({ erro: 'Há mesas desta OP ainda não concluídas pelos provadores.' });
-    if (lista.some((x) => !x.l.misu_em)) return res.status(409).json({ erro: 'O MISU ainda não entregou todas as mesas desta OP à contadeira.' });
+    if (lista.some((x) => derivar(x.l).misuEstado === 'pendente')) return res.status(409).json({ erro: 'O MISU ainda não entregou todas as mesas desta OP à contadeira.' });
     const apr = inteiro(req.body.aprovadas);
     if (apr === undefined || invalido(apr)) return res.status(400).json({ erro: 'Indica as rolhas aprovadas contadas pela máquina (número inteiro, 0 ou mais).' });
-    const partilhada = lista.some((x) => opsDoLote(x.l.ordem).length > 1);
-    const total = lista.reduce((t, x) => t + (derivar(x.l).totalRolhas || 0), 0);
-    const contaminados = lista.reduce((t, x) => t + (Number(x.l.misu_ligeiros) || 0) + (Number(x.l.misu_fortes) || 0), 0);
-    const partidas = lista.reduce((t, x) => t + (derivar(x.l).rolhasPartidas || 0), 0);
+    const partilhada = ag.partilhada;
+    const total = ag.totalRolhas, contaminados = ag.contaminados, partidas = ag.rolhasPartidas;
     if (!partilhada && total && apr + contaminados + partidas > total) {
       return res.status(400).json({ erro: `Aprovadas (${apr}) + contaminadas do MISU (${contaminados}) + partidas (${partidas}) é mais do que o total da OP (${total}).` });
     }
@@ -524,6 +746,152 @@ app.post('/api/logistica/qvs/:mesa', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao registar as QVs.' }); }
 });
 
+// --- Supervisora: descarregar o histórico completo de movimentos (CSV) ---
+app.post('/api/supervisora/movimentos', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const r = await pool.query(`SELECT id, em, acao, mesa, op, utilizador, status, pedido, resposta FROM movimentos ORDER BY id`);
+    if ((req.body || {}).formato === 'json') return res.json({ total: r.rowCount, movimentos: r.rows });
+    const esc = (v) => { if (v === null || v === undefined) return ''; const t = v instanceof Date ? v.toISOString() : String(v); return /[";\n,]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const cab = ['id', 'data_hora', 'acao', 'mesa', 'op', 'utilizador', 'resultado_http', 'pedido', 'resposta'];
+    const linhas = r.rows.map((m) => [m.id, m.em, m.acao, m.mesa, m.op, m.utilizador, m.status, m.pedido, m.resposta].map(esc).join(','));
+    res.type('text/csv; charset=utf-8').send('\uFEFF' + cab.join(',') + '\n' + linhas.join('\n'));
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter o histórico.' }); }
+});
+
+// ===================== Menu da supervisora (palavra-passe): provadores, provas das mesas, colocação/levantamento =====================
+const hhmm = (v) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(v || ''));
+app.post('/api/supervisora/provadores', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const { acao, id } = req.body || {};
+    const nome = String((req.body || {}).nome || '').replace(/\s+/g, ' ').trim();
+    if (acao !== 'listar') {
+      if (['adicionar', 'renomear'].includes(acao) && (nome.length < 2 || nome.length > 60)) return res.status(400).json({ erro: 'Escreve o nome (2 a 60 letras).' });
+    }
+    if (acao === 'adicionar') {
+      const ja = await pool.query(`SELECT id, ativo FROM aprovadores WHERE LOWER(nome) = LOWER($1)`, [nome]);
+      if (ja.rowCount && ja.rows[0].ativo) return res.status(409).json({ erro: 'Já existe um provador com esse nome.' });
+      if (ja.rowCount) await pool.query(`UPDATE aprovadores SET ativo = true WHERE id = $1`, [ja.rows[0].id]);
+      else await pool.query(`INSERT INTO aprovadores (nome) VALUES ($1)`, [nome]);
+    } else if (acao === 'renomear') {
+      const dup = await pool.query(`SELECT 1 FROM aprovadores WHERE LOWER(nome) = LOWER($1) AND id <> $2`, [nome, Number(id)]);
+      if (dup.rowCount) return res.status(409).json({ erro: 'Já existe um provador com esse nome.' });
+      const r = await pool.query(`UPDATE aprovadores SET nome = $1 WHERE id = $2`, [nome, Number(id)]);
+      if (!r.rowCount) return res.status(404).json({ erro: 'Provador não encontrado.' });
+    } else if (acao === 'desativar' || acao === 'ativar') {
+      if (acao === 'desativar') {
+        const ab = await pool.query(`SELECT 1 FROM registos r JOIN aprovadores a ON a.nome = r.aprovador WHERE a.id = $1 AND r.estado = 'Aberto' LIMIT 1`, [Number(id)]);
+        if (ab.rowCount) return res.status(409).json({ erro: 'Este provador tem uma mesa aberta. Fecha ou apaga essa prova primeiro.' });
+      }
+      const r = await pool.query(`UPDATE aprovadores SET ativo = $1 WHERE id = $2`, [acao === 'ativar', Number(id)]);
+      if (!r.rowCount) return res.status(404).json({ erro: 'Provador não encontrado.' });
+    } else if (acao !== 'listar') return res.status(400).json({ erro: 'Ação inválida.' });
+    const r = await pool.query(`SELECT id, nome, ativo FROM aprovadores ORDER BY ativo DESC, nome`);
+    res.json({ ok: true, provadores: r.rows });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao alterar os provadores.' }); }
+});
+
+// provas registadas hoje numa mesa (para apagar ou corrigir)
+app.post('/api/supervisora/registos', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const mesa = String((req.body || {}).mesa || '').toUpperCase();
+    if (!/^[AB]\d{1,2}$/.test(mesa)) return res.status(400).json({ erro: 'Mesa inválida.' });
+    const r = await pool.query(
+      `SELECT id, aprovador, hora_abertura, hora_fecho, estado,
+              to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura, to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho
+       FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE - 1 ORDER BY id`, [mesa]);
+    const hoje = plan.hojeLisboa();
+    res.json({ mesa, registos: r.rows.filter((x) => new Date(x.hora_abertura).toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' }) === hoje) });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter as provas.' }); }
+});
+app.post('/api/supervisora/registo/:id', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const id = Number(req.params.id);
+    const b = req.body || {};
+    const r0 = await pool.query(`SELECT * FROM registos WHERE id = $1`, [id]);
+    if (!r0.rowCount) return res.status(404).json({ erro: 'Prova não encontrada.' });
+    if (b.acao === 'apagar') {
+      await pool.query(`DELETE FROM registos WHERE id = $1`, [id]);
+      return res.json({ ok: true });
+    }
+    if (b.acao !== 'editar') return res.status(400).json({ erro: 'Ação inválida.' });
+    const hoje = plan.hojeLisboa();
+    const aprovador = b.aprovador === undefined ? r0.rows[0].aprovador : String(b.aprovador);
+    const ap = await pool.query(`SELECT 1 FROM aprovadores WHERE nome = $1`, [aprovador]);
+    if (!ap.rowCount) return res.status(400).json({ erro: 'Escolhe um provador da lista.' });
+    const estado = b.estado === undefined ? r0.rows[0].estado : b.estado;
+    if (!['Aberto', 'Fechado'].includes(estado)) return res.status(400).json({ erro: 'Estado: Aberto ou Fechado.' });
+    if (b.abertura !== undefined && !hhmm(b.abertura)) return res.status(400).json({ erro: 'Hora de abertura inválida (HH:MM).' });
+    if (b.fecho !== undefined && b.fecho !== null && b.fecho !== '' && !hhmm(b.fecho)) return res.status(400).json({ erro: 'Hora de fecho inválida (HH:MM).' });
+    const sets = ['aprovador = $1', 'estado = $2'], vals = [aprovador, estado];
+    if (b.abertura !== undefined) { vals.push(hoje, b.abertura); sets.push(`hora_abertura = ($${vals.length - 1}::date + $${vals.length}::time) AT TIME ZONE 'Europe/Lisbon'`); }
+    if (estado === 'Aberto') sets.push('hora_fecho = NULL');
+    else if (b.fecho !== undefined && b.fecho !== null && b.fecho !== '') { vals.push(hoje, b.fecho); sets.push(`hora_fecho = ($${vals.length - 1}::date + $${vals.length}::time) AT TIME ZONE 'Europe/Lisbon'`); }
+    else if (!r0.rows[0].hora_fecho) sets.push('hora_fecho = now()');
+    vals.push(id);
+    try { await pool.query(`UPDATE registos SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals); }
+    catch (e) { if (/uniq_mesa_aberta|duplicate/i.test(e.message)) return res.status(409).json({ erro: 'Já há outra prova aberta nesta mesa.' }); throw e; }
+    const r = await pool.query(`SELECT id, aprovador, estado, to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura, to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho FROM registos WHERE id = $1`, [id]);
+    res.json({ ok: true, registo: r.rows[0] });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao alterar a prova.' }); }
+});
+
+// editar uma ORDEM numa mesa (colocação): hoje ou amanhã
+app.post('/api/supervisora/ordem', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const b = req.body || {};
+    const hoje = plan.hojeLisboa();
+    const data = b.data || hoje;
+    if (data !== hoje && data !== plan.diaUtilSeguinte(hoje)) return res.status(400).json({ erro: 'Só se editam as mesas de hoje ou de amanhã.' });
+    const mesa = String(b.mesa || '').toUpperCase(), op = String(b.op || '').trim();
+    const r = await pool.query(`SELECT * FROM lote_ops WHERE data = $1 AND mesa = $2 ORDER BY de`, [data, mesa]);
+    const i = r.rows.findIndex((x) => x.op === op);
+    if (i < 0) return res.status(404).json({ erro: 'Esta ordem não está nesta mesa.' });
+    const cur = r.rows[i], seguinte = r.rows[i + 1];
+    const n = { ...cur };
+    if (b.novaOrdem !== undefined) {
+      const nova = String(b.novaOrdem).trim();
+      if (!/^\d{6,12}$/.test(nova) || !PREFIXOS_OP.some((p) => nova.startsWith(p))) return res.status(400).json({ erro: 'Nº de ordem inválido: só números e a começar por 150, 151 ou 950.' });
+      if (nova !== op) { const dup = await pool.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2`, [data, nova]); if (dup.rowCount) return res.status(409).json({ erro: 'Essa ordem já está colocada neste dia.' }); }
+      n.op = nova;
+    }
+    if (b.rolhasPorFrasco !== undefined) { if (![1, 2, 4].includes(Number(b.rolhasPorFrasco))) return res.status(400).json({ erro: 'Rolhas por frasco: 1, 2 ou 4.' }); n.rolhas_por_frasco = Number(b.rolhasPorFrasco); }
+    if (b.frascos !== undefined) {
+      const f = Number(b.frascos);
+      if (!Number.isInteger(f) || f < 1) return res.status(400).json({ erro: 'Frascos: número inteiro (1 ou mais).' });
+      const ate = cur.de + f - 1;
+      const lado = mesa[0], capM = plan.LAYOUT[lado].cap[mesa.slice(1)] || 0;
+      if (ate > capM) return res.status(400).json({ erro: `A mesa ${mesa} só tem ${capM} frascos: com ${f} frascos a ordem passava do fim da mesa.` });
+      if (seguinte && ate >= seguinte.de) return res.status(400).json({ erro: `Com ${f} frascos a ordem sobrepõe-se à ordem seguinte (que começa no frasco ${seguinte.de}).` });
+      n.frascos = f; n.ate = ate;
+    }
+    if (b.frascosPartidos !== undefined) { const v = Number(b.frascosPartidos); if (!Number.isInteger(v) || v < 0) return res.status(400).json({ erro: 'Frascos partidos: número inteiro (0 ou mais).' }); n.frascos_partidos = v; }
+    if (n.frascos_partidos > n.frascos) return res.status(400).json({ erro: 'Há mais frascos partidos do que frascos.' });
+    if (b.qvs !== undefined) { const v = Number(b.qvs); if (!Number.isInteger(v) || v < 0) return res.status(400).json({ erro: 'QVs: número inteiro (0 ou mais).' }); n.qvs = v; }
+    if (b.contadeira !== undefined) { if (typeof b.contadeira !== 'boolean') return res.status(400).json({ erro: 'Contadeira: sim ou não.' }); n.contadeira = b.contadeira; }
+    if (b.dsrol !== undefined) { if (typeof b.dsrol !== 'boolean') return res.status(400).json({ erro: 'DSROL: sim ou não.' }); n.dsrol = b.dsrol; }
+    if (b.tipo !== undefined) { if (!['EUR', 'GRUPO', 'AMOSTRA'].includes(String(b.tipo))) return res.status(400).json({ erro: 'Tipo: EUR, GRUPO ou AMOSTRA.' }); n.tipo = b.tipo; }
+    // o que o MISU apontou tem de continuar a caber nas rolhas da ordem
+    const rolhas = n.frascos * n.rolhas_por_frasco;
+    const contam = (n.contadeira ? 0 : (n.misu_ligeiros || 0)) + (n.misu_fortes || 0) + n.frascos_partidos * n.rolhas_por_frasco;
+    if (contam > rolhas) return res.status(400).json({ erro: 'O que já foi apontado (ligeiros, fortes e partidas) passa as rolhas da ordem. Corrige primeiro o MISU.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE lote_ops SET op = $1, frascos = $2, ate = $3, rolhas_por_frasco = $4, frascos_partidos = $5, qvs = $6, contadeira = $7, tipo = $8, dsrol = $9 WHERE data = $10 AND mesa = $11 AND op = $12`,
+        [n.op, n.frascos, n.ate, n.rolhas_por_frasco, n.frascos_partidos, n.qvs, n.contadeira, n.tipo, n.dsrol, data, mesa, op]);
+      await recalcularLote(client, data, mesa);
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao alterar a ordem.' }); }
+});
+
 // --- Supervisora: limpar todos os dados de teste (começar do zero) ---
 app.post('/api/supervisora/reset', async (req, res) => {
   try {
@@ -531,6 +899,7 @@ app.post('/api/supervisora/reset', async (req, res) => {
     if ((req.body || {}).confirmar !== 'APAGAR') return res.status(400).json({ erro: 'Falta a confirmação.' });
     await pool.query('DELETE FROM registos');
     await pool.query('DELETE FROM contagens_op');
+    await pool.query('DELETE FROM lote_ops');
     await pool.query('DELETE FROM lotes');
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao limpar os dados.' }); }
@@ -547,6 +916,15 @@ app.post('/api/supervisora/mesa/:mesa', async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ erro: 'Esta mesa não tem lote hoje.' });
     const l = r.rows[0];
     const b = req.body || {};
+    const colocadaPorOrdem = (await pool.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND mesa = $2 LIMIT 1`, [hoje, mesa])).rowCount > 0;
+    if (colocadaPorOrdem && ['ordem', 'tipo', 'rolhasPorFrasco', 'totalFrascosCliente', 'contadeira', 'dsrol', 'frascosPartidos', 'qvsColocacao'].some((k) => b[k] !== undefined)) {
+      return res.status(400).json({ erro: 'Esta mesa foi colocada por ordem: para mudar a colocação tira a ordem (Colocar) e volta a colocá-la.' });
+    }
+    if (colocadaPorOrdem) {
+      const sr = await pool.query(`SELECT * FROM lote_ops WHERE data = $1 AND mesa = $2 ORDER BY de`, [hoje, mesa]);
+      l._segs = sr.rows.map(segFormatado);
+      if (b.misu && (b.misu.ligeiros !== undefined || b.misu.fortes !== undefined)) return res.status(400).json({ erro: 'Esta mesa tem ordens: corrige o MISU por ordem.' });
+    }
     const sets = [], vals = [];
     const set = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
     const nao = (v) => v === undefined;
@@ -579,6 +957,25 @@ app.post('/api/supervisora/mesa/:mesa', async (req, res) => {
     const dn = derivar(novo);
     if (dn.totalRolhas !== null && dn.ligeiros !== null && dn.fortes !== null && dn.ligeiros + dn.fortes + (dn.rolhasPartidas || 0) > dn.totalRolhas) {
       return res.status(400).json({ erro: `Ligeiras + fortes (${dn.ligeiros + dn.fortes}) + partidas (${dn.rolhasPartidas || 0}) é mais do que o total da mesa (${dn.totalRolhas}).` });
+    }
+    // correção do MISU por ordem (mesas colocadas por ordem)
+    const mo = b.misuOrdens && typeof b.misuOrdens === 'object' ? b.misuOrdens : null;
+    const mudaOrdens = [];
+    if (mo && colocadaPorOrdem) {
+      for (const op of Object.keys(mo)) {
+        const sg = l._segs.find((s) => s.op === op);
+        if (!sg) return res.status(400).json({ erro: `A ordem ${op} não está nesta mesa.` });
+        const lig = sg.contadeira ? 0 : (mo[op].ligeiros === undefined || mo[op].ligeiros === null || mo[op].ligeiros === '' ? sg.ligeiros : Number(mo[op].ligeiros));
+        const fort = mo[op].fortes === undefined || mo[op].fortes === null || mo[op].fortes === '' ? sg.fortes : Number(mo[op].fortes);
+        if (![lig, fort].every((x) => x === null || (Number.isInteger(x) && x >= 0))) return res.status(400).json({ erro: `MISU (ordem ${op}): números inteiros (0 ou mais).` });
+        if ((lig || 0) + (fort || 0) + sg.rolhasPartidas > sg.rolhas) return res.status(400).json({ erro: `Ordem ${op}: ligeiras + fortes + partidas é mais do que as ${sg.rolhas} rolhas da ordem.` });
+        sg.ligeiros = lig; sg.fortes = fort; mudaOrdens.push(sg);
+      }
+    }
+    for (const sg of mudaOrdens) await pool.query(`UPDATE lote_ops SET misu_ligeiros = $1, misu_fortes = $2 WHERE data = $3 AND mesa = $4 AND op = $5`, [sg.ligeiros, sg.fortes, hoje, mesa, sg.op]);
+    if (mudaOrdens.length && l._segs.every((s) => s.fortes !== null && (s.contadeira || s.ligeiros !== null))) {
+      await pool.query(`UPDATE lotes SET misu_ligeiros = $1, misu_fortes = $2, misu_em = COALESCE(misu_em, now()) WHERE id = $3`,
+        [l._segs.reduce((t, s) => t + (s.ligeiros || 0), 0), l._segs.reduce((t, s) => t + (s.fortes || 0), 0), l.id]);
     }
     if (sets.length) {
       vals.push(l.id);

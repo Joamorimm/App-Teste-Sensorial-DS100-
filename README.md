@@ -124,3 +124,17 @@ Colocar/editar mesas na Logística pede a palavra-passe **8126**. Para mudar: Ra
 Já não há carregamento de Excel: a logística coloca as mesas no ecrã "Colocar · amanhã" (é o ecrã inicial da Logística).
 Para limpar dados de teste: "Editar · supervisora" (palavra-passe) → "Limpar todos os dados de teste".
 Para testar no próprio dia: "Editar · supervisora" → "Colocar mesas de HOJE (teste)".
+
+## Colocação por ordem
+A logística escreve o nº de ordem, os frascos, as rolhas por frasco (1, 2 ou 4), o tipo, a contadeira e o DSROL. A app calcula as mesas
+com o layout e a capacidade de frascos de cada mesa (regra das filas de 7, com 1 fila de separação entre ordens). Várias ordens podem
+partilhar a mesma mesa; cada uma tem as suas rolhas por frasco, frascos partidos e QVs. O total de rolhas da mesa é a soma das ordens.
+
+## Contadeira por ordem
+Sim ou não é decidido POR ORDEM, não por mesa. Numa mesa partilhada o MISU continua a trabalhar à mesa (uma só folha), mas aponta por ordem:
+as ordens com contadeira só levam aromas fortes; as sem contadeira levam ligeiros e fortes (aprovadas = rolhas da ordem − ligeiros − fortes − partidas).
+A contadeira trabalha à ordem. A mesa só é levantada quando o MISU apontou todas as ordens e a contadeira contou as ordens que lhe cabem.
+
+## Menu da supervisora (palavra-passe)
+Logística → Editar · supervisora abre um menu com: **Provadores** (adicionar, renomear, tirar/voltar à lista), **Provas de uma mesa** (editar ou apagar o que um provador registou hoje) e **Colocação e levantamento** (editar todos os campos, por ordem, de hoje ou de amanhã; corrigir o MISU e a contadeira). Tem ainda as ferramentas: colocar mesas de hoje (teste), descarregar o histórico e limpar dados de teste.
+Numa mesa com várias ordens, cada ordem é identificada como A7-1, A7-2, ...

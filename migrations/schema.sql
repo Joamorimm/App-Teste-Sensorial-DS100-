@@ -81,3 +81,48 @@ CREATE TABLE IF NOT EXISTS contagens_op (
   em TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (op, data)
 );
+
+-- Histórico de TODOS os movimentos da aplicação (nunca é apagado, nem pelo "limpar dados de teste")
+CREATE TABLE IF NOT EXISTS movimentos (
+  id BIGSERIAL PRIMARY KEY,
+  em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acao TEXT NOT NULL,
+  mesa TEXT,
+  op TEXT,
+  utilizador TEXT,
+  metodo TEXT,
+  caminho TEXT,
+  status INTEGER,
+  ip TEXT,
+  pedido TEXT,
+  resposta TEXT
+);
+CREATE INDEX IF NOT EXISTS movimentos_em_idx ON movimentos (em);
+CREATE INDEX IF NOT EXISTS movimentos_mesa_idx ON movimentos (mesa);
+
+-- Colocação por ORDEM: uma mesa pode ter várias ordens (cada uma com as suas rolhas por frasco)
+ALTER TABLE lotes ADD COLUMN IF NOT EXISTS total_rolhas INTEGER;
+ALTER TABLE lotes ADD COLUMN IF NOT EXISTS rolhas_partidas_total INTEGER;
+CREATE TABLE IF NOT EXISTS lote_ops (
+  data DATE NOT NULL,
+  mesa TEXT NOT NULL,
+  op TEXT NOT NULL,
+  de INTEGER NOT NULL,
+  ate INTEGER NOT NULL,
+  frascos INTEGER NOT NULL,
+  rolhas_por_frasco INTEGER NOT NULL,
+  frascos_partidos INTEGER NOT NULL DEFAULT 0,
+  qvs INTEGER NOT NULL DEFAULT 0,
+  contadeira BOOLEAN NOT NULL,
+  tipo TEXT NOT NULL,
+  dsrol BOOLEAN NOT NULL,
+  criado TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (data, mesa, op)
+);
+
+-- A contadeira é decidida POR ORDEM; o MISU aponta por ordem dentro da mesa
+ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS misu_ligeiros INTEGER;
+ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS misu_fortes INTEGER;
+
+-- Identificação das ordens numa mesa partilhada: A7-1, A7-2, ...
+ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS seq INTEGER;
