@@ -158,3 +158,4 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - Logística: um só passo (QVs + levantar ordem); depois só a supervisora altera.
 - Fluxo: MISU → levantamento (logística) → contadeira (rolhas OK + ligeiras, tem de bater com a colocação).
 - Supervisora: Ordens · encomenda e decisões → reabrir MISU / levantamento / contagem.
+- v58: a supervisora pode alterar o nº de provadores de uma mesa (Editar · supervisora → Provas de uma mesa).
