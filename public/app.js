@@ -1074,13 +1074,16 @@ async function folhaProvadores(lista) {
 
 // ----- Provas de uma mesa: editar ou apagar o que um provador registou -----
 async function folhaProvasMesa(codigo) {
-  let regs, aprov;
+  let regs, aprov, nProv = null;
   try {
-    regs = (await enviar('/api/supervisora/registos', { pin: pinSessao, mesa: codigo })).registos;
+    const rr = await enviar('/api/supervisora/registos', { pin: pinSessao, mesa: codigo });
+    regs = rr.registos; nProv = rr.provadores;
     aprov = await (await fetch('/api/aprovadores')).json();
   } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('erroLog').textContent = e.message; return; }
   const nomes = aprov.map((a) => a.nome);
   abrirFolha(`<h3>Provas · mesa ${codigo} · hoje</h3>
+    ${nProv ? `<div class="prop-linha">${optSel('rgN', 'Nº de provadores necessários nesta mesa', [1, 2, 3, 4, 5, 6].map((n) => [n, String(n)]), nProv)}
+      <button class="secundario" id="rgNOk">Guardar nº de provadores</button></div>` : ''}
     ${regs.length ? regs.map((r) => {
       const lst = nomes.includes(r.aprovador) ? nomes : [r.aprovador, ...nomes];
       return `<div class="prop-linha"><b>${esc(r.aprovador)}</b> · ${r.estado}
@@ -1092,6 +1095,11 @@ async function folhaProvasMesa(codigo) {
     <button class="secundario" id="rgX">Fechar</button>
     <div class="msg-erro" id="rgErro"></div>`);
   el('rgX').onclick = fecharFolha;
+  if (el('rgNOk')) el('rgNOk').onclick = async () => {
+    el('rgErro').textContent = '';
+    try { await enviar('/api/supervisora/mesa/' + codigo, { pin: pinSessao, provadores: Number(el('rgN').value) }); carregarLogistica(); folhaProvasMesa(codigo); }
+    catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('rgErro').textContent = e.message; }
+  };
   const erro = (e) => { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('rgErro').textContent = e.message; };
   el('sheetBox').querySelectorAll('button[data-g]').forEach((b) => {
     b.onclick = async () => {
