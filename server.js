@@ -1037,7 +1037,8 @@ app.post('/api/supervisora/registos', async (req, res) => {
               to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura, to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho
        FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE - 1 ORDER BY id`, [mesa]);
     const hoje = plan.hojeLisboa();
-    res.json({ mesa, registos: r.rows.filter((x) => new Date(x.hora_abertura).toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' }) === hoje) });
+    const lt = (await pool.query(`SELECT numero_provadores FROM lotes WHERE mesa = $1 AND data_planeamento = $2 AND ativo = true`, [mesa, hoje])).rows[0];
+    res.json({ mesa, provadores: lt ? lt.numero_provadores : null, feitos: r.rows.filter((x) => x.estado === 'Fechado').length, registos: r.rows.filter((x) => new Date(x.hora_abertura).toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' }) === hoje) });
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter as provas.' }); }
 });
 app.post('/api/supervisora/registo/:id', async (req, res) => {
@@ -1256,6 +1257,7 @@ app.post('/api/supervisora/mesa/:mesa', async (req, res) => {
       if (!['EUR', 'GRUPO', 'AMOSTRA'].includes(String(b.tipo))) return res.status(400).json({ erro: 'Tipo: EUR, GRUPO ou AMOSTRA.' });
       set('tipo', b.tipo); set('numero_provadores', b.tipo === 'AMOSTRA' ? 3 : 2);
     }
+    if (!nao(b.provadores)) { const n = Number(b.provadores); if (!Number.isInteger(n) || n < 1 || n > 6) return res.status(400).json({ erro: 'Nº de provadores: 1 a 6.' }); set('numero_provadores', n); }
     if (!nao(b.rolhasPorFrasco)) { if (![1, 2, 4].includes(Number(b.rolhasPorFrasco))) return res.status(400).json({ erro: 'Rolhas por frasco: 1, 2 ou 4.' }); set('rolhas_por_frasco', Number(b.rolhasPorFrasco)); }
     if (!nao(b.totalFrascosCliente)) { if (!int0(b.totalFrascosCliente) || Number(b.totalFrascosCliente) < 1) return res.status(400).json({ erro: 'Total de frascos/cliente inválido.' }); set('total_frascos_cliente', Number(b.totalFrascosCliente)); }
     if (!nao(b.contadeira)) { if (typeof b.contadeira !== 'boolean') return res.status(400).json({ erro: 'Contadeira: sim ou não.' }); set('contadeira', b.contadeira); }
