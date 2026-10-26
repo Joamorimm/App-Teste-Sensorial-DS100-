@@ -9,6 +9,7 @@ const estado = {
 const el = (id) => document.getElementById(id);
 
 function mostrarTela(id) {
+  if (id !== 'telaLogistica') pinSessao = null;   // sair da Logística termina a sessão da supervisora
   document.querySelectorAll('.tela').forEach((t) => t.classList.remove('ativa'));
   el(id).classList.add('ativa');
   const login = id === 'telaLogin';
@@ -282,6 +283,8 @@ function definirModo(modo, hojeTeste) {
   colocarHoje = modo === 'colocar' && !!hojeTeste;
   if (modo === 'editar' || modo === 'editarMesas') { if (modo === 'editar') editDia = 'hoje'; definirSeg('segEditDia', editDia); }
   const edit = ['editar', 'editarMesas', 'editarProvas'].includes(modo);
+  // a palavra-passe da supervisora só vale enquanto se está no menu dela: ao sair, volta a pedir
+  if (!edit && !(modo === 'colocar' && hojeTeste)) pinSessao = null;
   const hub = modo === 'editar';
   el('editHub').style.display = hub ? '' : 'none';
   el('editVoltar').style.display = modo === 'editarMesas' || modo === 'editarProvas' ? '' : 'none';
@@ -336,6 +339,13 @@ el('btnHistorico').onclick = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   } catch (e) { el('erroLog').textContent = e.message; }
 };
+const semear = (provas) => async () => {
+  el('erroLog').textContent = '';
+  try { const r = await enviar('/api/supervisora/seed-teste', { pin: pinSessao, provas }); alert(`Ordens de teste carregadas para ${dataPT(r.data)} (lado ${r.lado}): ${r.mesas} mesas.`); }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('erroLog').textContent = e.message; }
+};
+el('btnSeed').onclick = semear(false);
+el('btnSeedProvas').onclick = semear(true);
 el('btnReset').onclick = async () => {
   if (!confirm('Apagar TODAS as mesas, provas e levantamentos? Só para limpar dados de teste.')) return;
   try { await enviar('/api/supervisora/reset', { pin: pinSessao, confirmar: 'APAGAR' }); carregarLogistica(); alert('Dados de teste apagados.'); }

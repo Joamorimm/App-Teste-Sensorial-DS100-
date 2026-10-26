@@ -20,6 +20,7 @@ const ACOES = [
   [/^\/api\/contadeira\/op\/([^/]+)$/, 'contadeira'],
   [/^\/api\/supervisora\/mesa\/([^/]+)$/, 'edicao_supervisora'],
   [/^\/api\/supervisora\/reset$/, 'limpeza_dados_teste'],
+  [/^\/api\/supervisora\/seed-teste$/, 'carregar_ordens_teste'],
   [/^\/api\/supervisora\/provadores$/, 'edicao_provadores'],
   [/^\/api\/supervisora\/registo\/(\d+)$/, 'edicao_prova_mesa'],
   [/^\/api\/supervisora\/ordem$/, 'edicao_ordem'],
@@ -892,6 +893,66 @@ app.post('/api/supervisora/ordem', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao alterar a ordem.' }); }
 });
 
+// ===================== Dados de teste: ordens colocadas na sexta 23/10 para a prova de HOJE (segunda 26/10) =====================
+const ORDENS_TESTE = [
+  { op: '15007565', frascos: 2993, rolhas: 2, tipo: 'GRUPO', contadeira: true,  dsrol: false },
+  { op: '15102480', frascos: 25,   rolhas: 2, tipo: 'EUR',   contadeira: true,  dsrol: false },
+  { op: '15102467', frascos: 230,  rolhas: 2, tipo: 'EUR',   contadeira: true,  dsrol: false },
+  { op: '15102469', frascos: 7,    rolhas: 1, tipo: 'EUR',   contadeira: false, dsrol: false },
+  { op: '15102470', frascos: 335,  rolhas: 1, tipo: 'EUR',   contadeira: false, dsrol: false },
+  { op: '15102471', frascos: 401,  rolhas: 1, tipo: 'EUR',   contadeira: false, dsrol: false },
+];
+// Coloca as ordens de teste para HOJE (as que já lá estão são ignoradas). Com `provas`, dá as provas como concluídas
+// nas primeiras mesas para se poder testar já o levantamento (MISU, contadeira, logística).
+async function semearOrdensTeste({ provas } = {}) {
+  const data = plan.hojeLisboa();
+  const lado = plan.ladoDoDia(data);
+  const client = await pool.connect();
+  const colocadas = [];
+  try {
+    await client.query('BEGIN');
+    for (const o of ORDENS_TESTE) {
+      const ja = await client.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2 LIMIT 1`, [data, o.op]);
+      if (ja.rowCount) continue;
+      const oc = await client.query(`SELECT mesa, MAX(ate)::int AS ate FROM lote_ops WHERE data = $1 GROUP BY mesa`, [data]);
+      const a = alocar(lado, new Map(oc.rows.filter((r) => r.mesa[0] === lado).map((r) => [Number(r.mesa.slice(1)), r.ate])), o.frascos);
+      if (a.semCapacidade > 0) continue;
+      for (const s of a.segmentos) {
+        await client.query(
+          `INSERT INTO lote_ops (data, mesa, op, de, ate, frascos, rolhas_por_frasco, frascos_partidos, qvs, contadeira, tipo, dsrol, seq)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$8,$9,$10, COALESCE((SELECT MAX(seq) FROM lote_ops WHERE data = $1 AND mesa = $2), 0) + 1)`,
+          [data, s.mesa, o.op, s.de, s.ate, s.frascos, o.rolhas, o.contadeira, o.tipo, o.dsrol]);
+        await recalcularLote(client, data, s.mesa);
+        colocadas.push(s.mesa);
+      }
+    }
+    if (provas) {
+      const nomes = (await client.query(`SELECT nome FROM aprovadores WHERE ativo = true ORDER BY nome`)).rows.map((r) => r.nome);
+      const lotes = (await client.query(`SELECT mesa, numero_provadores FROM lotes WHERE data_planeamento = $1 AND ativo = true ORDER BY mesa`, [data])).rows
+        .sort((a, b) => Number(a.mesa.slice(1)) - Number(b.mesa.slice(1)));
+      const n = Math.max(1, lotes.length - 1);   // todas as mesas com provas feitas, menos a última (fica "em prova")
+      for (const l of lotes.slice(0, n)) {
+        const ja = await client.query(`SELECT 1 FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE LIMIT 1`, [l.mesa]);
+        if (ja.rowCount) continue;
+        for (let k = 0; k < l.numero_provadores && k < nomes.length; k++) {
+          await client.query(
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, now() - ($3 || ' minutes')::interval, now() - ($4 || ' minutes')::interval, 'Fechado', NULL)`,
+            [l.mesa, nomes[(Number(l.mesa.slice(1)) + k) % nomes.length], String(200 - k * 40), String(190 - k * 40)]);
+        }
+      }
+    }
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+  const r = await pool.query(`SELECT COUNT(*)::int AS n FROM lotes WHERE data_planeamento = $1`, [data]);
+  return { data, lado, mesas: r.rows[0].n };
+}
+app.post('/api/supervisora/seed-teste', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    res.json({ ok: true, ...(await semearOrdensTeste({ provas: (req.body || {}).provas === true })) });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao carregar as ordens de teste.' }); }
+});
+
 // --- Supervisora: limpar todos os dados de teste (começar do zero) ---
 app.post('/api/supervisora/reset', async (req, res) => {
   try {
@@ -1009,6 +1070,10 @@ async function migrarEArrancar() {
     console.log('Migração/seed aplicados.');
   } catch (err) {
     console.error('Aviso: falha ao aplicar migração automática:', err.message);
+  }
+  if (process.env.SEED_TESTE === '1') {
+    try { const r = await semearOrdensTeste({ provas: process.env.SEED_TESTE_PROVAS === '1' }); console.log(`Ordens de teste carregadas para ${r.data} (lado ${r.lado}): ${r.mesas} mesas.`); }
+    catch (err) { console.error('Aviso: falha ao carregar as ordens de teste:', err.message); }
   }
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`DS100 app a correr na porta ${PORT}`));
