@@ -139,6 +139,9 @@ A contadeira trabalha à ordem. A mesa só é levantada quando o MISU apontou to
 Logística → Editar · supervisora abre um menu com: **Provadores** (adicionar, renomear, tirar/voltar à lista), **Provas de uma mesa** (editar ou apagar o que um provador registou hoje) e **Colocação e levantamento** (editar todos os campos, por ordem, de hoje ou de amanhã; corrigir o MISU e a contadeira). Tem ainda as ferramentas: colocar mesas de hoje (teste), descarregar o histórico e limpar dados de teste.
 Numa mesa com várias ordens, cada ordem é identificada como A7-1, A7-2, ...
 
+## Carga inicial (permanente)
+No primeiro arranque a app grava na base de dados as 6 ordens colocadas na sexta 23/10 para a prova de segunda 26/10 (a mesa A7 com 5 ordens, etc.). Faz-se **uma só vez** (fica registada em `cargas_iniciais`): se depois apagares ou editares as mesas, não voltam a aparecer. Não precisas de variáveis.
+
 ## Dados de teste (colocação de sexta 23/10 para a prova de segunda 26/10)
 No menu da supervisora: **Carregar ordens de teste** (6 ordens, com a mesa 7 como no exemplo: 5 ordens na mesma mesa) ou **... com provas já feitas** (todas as mesas, menos a última, ficam prontas para o MISU/levantamento; a A7 tem 5 ordens).
 Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TESTE=1` e, se quiseres as provas feitas, `SEED_TESTE_PROVAS=1`. As ordens carregam-se para o dia de hoje no arranque (sem duplicar). Retira as variáveis quando acabarem os testes.

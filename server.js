@@ -904,8 +904,8 @@ const ORDENS_TESTE = [
 ];
 // Coloca as ordens de teste para HOJE (as que já lá estão são ignoradas). Com `provas`, dá as provas como concluídas
 // nas primeiras mesas para se poder testar já o levantamento (MISU, contadeira, logística).
-async function semearOrdensTeste({ provas } = {}) {
-  const data = plan.hojeLisboa();
+async function semearOrdensTeste({ provas, data: dataFixa } = {}) {
+  const data = dataFixa || plan.hojeLisboa();
   const lado = plan.ladoDoDia(data);
   const client = await pool.connect();
   const colocadas = [];
@@ -1070,6 +1070,18 @@ async function migrarEArrancar() {
     console.log('Migração/seed aplicados.');
   } catch (err) {
     console.error('Aviso: falha ao aplicar migração automática:', err.message);
+  }
+  // CARGA INICIAL (uma só vez): ordens colocadas na sexta 23/10 para a prova de segunda 26/10. Ficam gravadas na base de dados.
+  if (!process.env.DS100_PGLITE || process.env.FORCAR_CARGA_INICIAL === '1') {
+    try {
+      const nome = 'ordens_prova_2026-10-26';
+      const ja = await pool.query(`SELECT 1 FROM cargas_iniciais WHERE nome = $1`, [nome]);
+      if (!ja.rowCount) {
+        const r = await semearOrdensTeste({ data: '2026-10-26' });
+        await pool.query(`INSERT INTO cargas_iniciais (nome) VALUES ($1) ON CONFLICT DO NOTHING`, [nome]);
+        console.log(`Carga inicial: ordens da prova de ${r.data} (lado ${r.lado}): ${r.mesas} mesas.`);
+      }
+    } catch (err) { console.error('Aviso: falha na carga inicial das ordens:', err.message); }
   }
   if (process.env.SEED_TESTE === '1') {
     try { const r = await semearOrdensTeste({ provas: process.env.SEED_TESTE_PROVAS === '1' }); console.log(`Ordens de teste carregadas para ${r.data} (lado ${r.lado}): ${r.mesas} mesas.`); }
