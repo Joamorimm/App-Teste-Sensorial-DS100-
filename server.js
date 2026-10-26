@@ -930,13 +930,13 @@ async function semearOrdensTeste({ provas, data: dataFixa } = {}) {
       const nomes = (await client.query(`SELECT nome FROM aprovadores WHERE ativo = true ORDER BY nome`)).rows.map((r) => r.nome);
       const lotes = (await client.query(`SELECT mesa, numero_provadores FROM lotes WHERE data_planeamento = $1 AND ativo = true ORDER BY mesa`, [data])).rows
         .sort((a, b) => Number(a.mesa.slice(1)) - Number(b.mesa.slice(1)));
-      const n = Math.max(1, lotes.length - 1);   // todas as mesas com provas feitas, menos a última (fica "em prova")
+      const n = lotes.length;   // todas as mesas ficam com as provas feitas (prontas para o MISU)
       for (const l of lotes.slice(0, n)) {
         const ja = await client.query(`SELECT 1 FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE LIMIT 1`, [l.mesa]);
         if (ja.rowCount) continue;
         for (let k = 0; k < l.numero_provadores && k < nomes.length; k++) {
           await client.query(
-            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, now() - ($3 || ' minutes')::interval, now() - ($4 || ' minutes')::interval, 'Fechado', NULL)`,
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - ($3 || ' minutes')::interval, CURRENT_DATE + interval '1 minute'), GREATEST(now() - ($4 || ' minutes')::interval, CURRENT_DATE + interval '2 minutes'), 'Fechado', NULL)`,
             [l.mesa, nomes[(Number(l.mesa.slice(1)) + k) % nomes.length], String(200 - k * 40), String(190 - k * 40)]);
         }
       }
@@ -1071,15 +1071,16 @@ async function migrarEArrancar() {
   } catch (err) {
     console.error('Aviso: falha ao aplicar migração automática:', err.message);
   }
-  // CARGA INICIAL (uma só vez): ordens colocadas na sexta 23/10 para a prova de segunda 26/10. Ficam gravadas na base de dados.
+  // CARGA INICIAL (uma só vez). Fica gravada na base de dados.
   if (!process.env.DS100_PGLITE || process.env.FORCAR_CARGA_INICIAL === '1') {
     try {
-      const nome = 'ordens_prova_2026-10-26';
+      // teste no gemba: as 6 ordens colocadas (sexta 23/10) para o dia do arranque, com as provas dos provadores já feitas
+      const nome = 'carga_gemba_ordens_e_provas';
       const ja = await pool.query(`SELECT 1 FROM cargas_iniciais WHERE nome = $1`, [nome]);
       if (!ja.rowCount) {
-        const r = await semearOrdensTeste({ data: '2026-10-26' });
+        const r = await semearOrdensTeste({ data: process.env.CARGA_DATA || undefined, provas: true });
         await pool.query(`INSERT INTO cargas_iniciais (nome) VALUES ($1) ON CONFLICT DO NOTHING`, [nome]);
-        console.log(`Carga inicial: ordens da prova de ${r.data} (lado ${r.lado}): ${r.mesas} mesas.`);
+        console.log(`Carga inicial: ordens da prova de ${r.data} (lado ${r.lado}): ${r.mesas} mesas, com as provas feitas.`);
       }
     } catch (err) { console.error('Aviso: falha na carga inicial das ordens:', err.message); }
   }

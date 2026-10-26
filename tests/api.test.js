@@ -809,6 +809,26 @@ test('supervisora: editar uma ordem (frascos, rolhas, partidos, contadeira...) r
   assert.strictEqual((await api('POST', '/api/supervisora/ordem', { pin: '8126', data: '2030-01-01', mesa: `${L}1`, op: '15007999' })).status, 400);
 });
 
+test('ordens de teste (sexta 23/10 → prova de hoje): carregam-se uma só vez, com a A7 do exemplo', async () => {
+  assert.strictEqual((await api('POST', '/api/supervisora/seed-teste', {})).status, 401);
+  const r = await api('POST', '/api/supervisora/seed-teste', { pin: '8126' });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.mesas, 9);                                   // A1..A9 (lado do dia)
+  await api('POST', '/api/supervisora/seed-teste', { pin: '8126' });     // repetir não duplica
+  const hojeD = plan.hojeLisboa(), L = plan.ladoDoDia(hojeD);
+  const mesas = (await api('GET', '/api/logistica/mesas')).body.mesas;
+  const m7 = mesas.find((x) => x.mesa === `${L}7`);
+  assert.deepStrictEqual(m7.segmentos.map((s) => [s.op, s.de, s.ate, s.contadeira]), [['15007565', 1, 95, true], ['15102480', 106, 130, true], ['15102467', 141, 370, true], ['15102469', 379, 385, false], ['15102470', 393, 483, false]]);
+  assert.strictEqual(m7.ocupado, 483);
+  assert.strictEqual(mesas.find((x) => x.mesa === `${L}1`).totalRolhas, 483 * 2);
+  assert.strictEqual(mesas.filter((x) => x.ordem).length, 9);
+  const prov = await api('POST', '/api/supervisora/seed-teste', { pin: '8126', provas: true });
+  assert.strictEqual(prov.status, 200);
+  const lv = (await api('GET', '/api/levantamento')).body.mesas;
+  assert.strictEqual(lv.filter((m) => m.estadoProva === 'pronta').length, 9);   // todas as mesas com as provas feitas, prontas para o MISU
+  assert.strictEqual(lv.filter((m) => m.fase === 'misu').length, 9);
+});
+
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {
   for (let i = 0; i < 5; i++) assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: 'x' + i })).status, 401);
   assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);
