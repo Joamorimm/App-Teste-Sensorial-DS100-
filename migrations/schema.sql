@@ -126,3 +126,9 @@ ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS misu_fortes INTEGER;
 
 -- Identificação das ordens numa mesa partilhada: A7-1, A7-2, ...
 ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS seq INTEGER;
+
+-- Cargas iniciais de dados reais que só se fazem UMA vez (para não voltarem a aparecer se forem apagadas)
+CREATE TABLE IF NOT EXISTS cargas_iniciais (
+  nome TEXT PRIMARY KEY,
+  em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
