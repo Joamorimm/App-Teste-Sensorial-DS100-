@@ -132,3 +132,29 @@ CREATE TABLE IF NOT EXISTS cargas_iniciais (
   nome TEXT PRIMARY KEY,
   em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Sábados que a supervisora passa a contar como dia útil (exceção pontual)
+CREATE TABLE IF NOT EXISTS dias_extra (
+  data DATE PRIMARY KEY,
+  criado TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Ordens que podem durar mais do que um dia: encomenda (em rolhas), fecho parcial/final e decisão da supervisora
+CREATE TABLE IF NOT EXISTS ordens (
+  op TEXT PRIMARY KEY,
+  encomenda INTEGER,
+  rolhas_adicionais INTEGER NOT NULL DEFAULT 0,
+  aceite_falta BOOLEAN NOT NULL DEFAULT FALSE,
+  aceite_em TIMESTAMPTZ,
+  criado TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS ordens_dia (
+  data DATE NOT NULL,
+  op TEXT NOT NULL,
+  continua BOOLEAN NOT NULL DEFAULT FALSE,
+  qvs_logistica INTEGER NOT NULL DEFAULT 0,
+  levantada_em TIMESTAMPTZ,
+  aprovadas_final INTEGER,
+  PRIMARY KEY (data, op)
+);
+ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS misu_qvs INTEGER;

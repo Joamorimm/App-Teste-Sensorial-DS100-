@@ -38,7 +38,7 @@ function derivar(l) {
   // por ordem (sem contadeira): rolhas aprovadas = rolhas da ordem - ligeiras - fortes - partidas
   const segmentos = segs ? segs.map((s) => ({ ...s, aprovadas: !s.contadeira && contaminadosFeito ? s.rolhas - (s.ligeiros || 0) - (s.fortes || 0) - s.rolhasPartidas : null })) : null;
 
-  const q = { colocacao: n(l.qvs_colocacao) || 0, misu: n(l.misu_qvs) || 0, logistica: n(l.log_qvs) || 0 };
+  const q = { colocacao: n(l.qvs_colocacao) || 0, misu: segs ? segs.reduce((t, s) => t + (s.misuQvs || 0), 0) : (n(l.misu_qvs) || 0), logistica: n(l.log_qvs) || 0 };
   q.total = q.colocacao + q.misu + q.logistica;
 
   let misuEstado;

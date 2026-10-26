@@ -249,6 +249,8 @@ main{margin-top:0;padding-top:16px;}
         <button class="primario" id="hubProvadores" style="margin-top:6px;">Provadores · lista de nomes</button>
         <button class="primario" id="hubProvas" style="margin-top:8px;">Provas de uma mesa · editar ou apagar</button>
         <button class="primario" id="hubMesas" style="margin-top:8px;">Colocação e levantamento · editar campos</button>
+        <button class="primario" id="hubOrdens" style="margin-top:8px;">Ordens · encomenda e decisões</button>
+        <button class="primario" id="hubDias" style="margin-top:8px;">Dias de trabalho · incluir sábado</button>
         <p class="intro" style="margin-top:16px;">Ferramentas</p>
         <button class="secundario" id="btnColocarHoje" style="margin-top:0;">Colocar mesas de HOJE (teste)</button>
         <button class="secundario" id="btnSeed">Carregar ordens de teste (colocação de 23/10)</button>
@@ -264,6 +266,10 @@ main{margin-top:0;padding-top:16px;}
         </div>
       </div>
 
+      <div id="levVista" class="card" style="display:none;margin-bottom:12px;padding:8px;">
+        <div class="seg" id="segVistaLev"><button data-v="mesas" class="ativa">Mesas · MISU</button><button data-v="ordens">Ordens · logística</button></div>
+      </div>
+      <div id="levOrdens" style="display:none;"></div>
       <div id="logResumoLev" class="log-resumo">
         <div class="log-kpi verm"><b id="kVerm">0</b><span>MISU</span></div>
         <div class="log-kpi verde"><b id="kVerdes">0</b><span>logística</span></div>
@@ -299,6 +305,15 @@ main{margin-top:0;padding-top:16px;}
         <div class="campo">
           <label>DSROL</label>
           <div class="seg" id="segDsrol"><button data-v="sim">Sim</button><button data-v="nao">Não</button></div>
+        </div>
+        <div class="campo">
+          <label>Quantidade encomendada (nº de rolhas)</label>
+          <input type="number" id="colEnc" inputmode="numeric" min="1" placeholder="Ex: 12000" />
+          <div class="dica" id="dicaEnc">Total da ordem, mesmo que continue noutros dias</div>
+        </div>
+        <div class="campo">
+          <label>A ordem continua amanhã?</label>
+          <div class="seg" id="segContinua"><button data-v="sim">Sim</button><button data-v="nao">Não</button></div>
         </div>
         <div class="resumo-rolhas" id="colResumo">Indica os frascos e as rolhas por frasco para ver o total de rolhas.</div>
         <button class="primario" id="btnCalcular">Calcular mesas</button>

@@ -634,7 +634,7 @@ test('colocação por ordem: 5 ordens (2 e 1 rolhas) partilham a mesma mesa e re
   const dia = proximoUtil();
   const L = plan.ladoDoDia(dia);
   const ordens = [['15007565', 95, 2], ['15102480', 25, 2], ['15102467', 230, 2], ['15102469', 7, 1], ['15102470', 91, 1]];
-  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false };
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, continua: false, encomenda: 100000 };
   for (const [op, f, r] of ordens) {
     const p = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: op, frascos: f, rolhasPorFrasco: r });
     assert.strictEqual(p.status, 200);
@@ -664,7 +664,7 @@ test('colocação por ordem: 5 ordens (2 e 1 rolhas) partilham a mesma mesa e re
 test('colocação por ordem: uma ordem grande reparte-se por várias mesas; valida dados e dia', async () => {
   const dia = proximoUtil();
   const L = plan.ladoDoDia(dia);
-  const base = { data: dia, tipo: 'GRUPO', contadeira: true, dsrol: true, ordem: '15102001', rolhasPorFrasco: 4 };
+  const base = { data: dia, tipo: 'GRUPO', contadeira: true, dsrol: true, continua: false, encomenda: 100000, ordem: '15102001', rolhasPorFrasco: 4 };
   const p = await api('POST', '/api/logistica/ordem/proposta', { ...base, frascos: 1000 });
   assert.deepStrictEqual(p.body.segmentos.map((s) => [s.mesa, s.frascos]), [[`${L}1`, 483], [`${L}2`, 483], [`${L}3`, 34]]);
   assert.strictEqual(p.body.totalRolhas, 4000);
@@ -690,7 +690,7 @@ test('colocação por ordem: uma ordem grande reparte-se por várias mesas; vali
 test('colocação por ordem: mesa partilhada em levantamento (hoje): MISU à mesa com as rolhas somadas', async () => {
   const hoje = plan.hojeLisboa();
   const Lh = await require('../logic').ladoHoje();
-  const b = { data: hoje, pin: '8126', tipo: 'EUR', contadeira: false, dsrol: false };
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', contadeira: false, dsrol: false, continua: false, encomenda: 100000 };
   assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15007565', frascos: 95, rolhasPorFrasco: 2, distribuicao: [{ mesa: `${Lh}1`, partidos: 2 }] })).status, 200);
   assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102469', frascos: 7, rolhasPorFrasco: 1 })).status, 200);
   await fechadoHa(`${Lh}1`, 'Marta Santos', 60);
@@ -710,7 +710,7 @@ test('colocação por ordem: mesa partilhada em levantamento (hoje): MISU à mes
 test('contadeira POR ORDEM: numa mesa partilhada, uma ordem vai à contadeira e a outra não', async () => {
   const hoje = plan.hojeLisboa();
   const Lh = await require('../logic').ladoHoje();
-  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, rolhasPorFrasco: 2 };
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 100000, rolhasPorFrasco: 2 };
   assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15007565', frascos: 100, contadeira: true })).status, 200);
   assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102480', frascos: 25, contadeira: false })).status, 200);
   await fechadoHa(`${Lh}1`, 'Marta Santos', 60);
@@ -726,19 +726,75 @@ test('contadeira POR ORDEM: numa mesa partilhada, uma ordem vai à contadeira e 
   assert.strictEqual(m.segmentos[0].ligeiros, 0);
   assert.strictEqual(m.segmentos[1].aprovadas, 50 - 3);                     // 25 frascos x 2 rolhas - 2 - 1
   assert.strictEqual((await api('POST', '/api/contadeira/op/15102480', { aprovadas: 1 })).status, 404);   // a outra ordem não vai à contadeira
-  // levantar bloqueado até a contadeira contar a OP 15007565
-  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 409);
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 300 })).status, 400);  // 300 + 4 > 200
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196 })).status, 200);
-  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 200);
-  // depois de entregue à contadeira o MISU já não mexe
+  // novo fluxo: levanta-se primeiro (logística, com QVs) e só depois a contadeira conta
+  const LV = (op, extra = {}) => api('POST', '/api/logistica/ordem/levantar', { op, ...extra });
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0 })).status, 409);   // ainda não levantada
+  assert.strictEqual((await LV('15007565')).status, 400);                                                  // faltam as QVs
+  assert.strictEqual((await LV('15007565', { qvs: 7 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 409);       // a mesa não se levanta: é pela ordem
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/qvs', { op: '15007565', qvs: 9 })).status, 409);   // levantada: bloqueada
+  let od = (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === '15007565');
+  assert.deepStrictEqual([od.fase, od.aguardaContadeira, od.resultado], ['levantada', true, 'em_curso']);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196 })).status, 400);   // faltam as ligeiras
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2 })).status, 400);   // 190+2+4 != 200
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0 })).status, 409);   // já registada
+  assert.strictEqual((await LV('15102480', { qvs: 0 })).status, 200);
+  assert.strictEqual((await lev(`${Lh}1`)).estadoProva, 'levantada');                                       // todas as ordens levantadas: mesa levantada
+  od = (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === '15007565');
+  assert.deepStrictEqual([od.qvs.logistica, od.aprovadasDia, od.fase, od.aguardaContadeira], [7, 194, 'levantada', false]);
+  assert.strictEqual((await LV('15102480', { desfazer: true })).status, 403);                               // só a supervisora desfaz
+  assert.strictEqual((await LV('15102480', { desfazer: true, pin: '8126' })).status, 200);
+  assert.notStrictEqual((await lev(`${Lh}1`)).estadoProva, 'levantada');
+  // MISU registado: bloqueado (só a supervisora)
   assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { '15007565': { fortes: 1 }, '15102480': { ligeiros: 0, fortes: 0 } } })).status, 409);
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { pin: '8126', ordens: { '15007565': { fortes: 4 }, '15102480': { ligeiros: 2, fortes: 1 } } })).status, 200);
+});
+
+test('ordens de vários dias: continua amanhã = 1.º fecho; somatório < encomenda = pendente (decisão da supervisora)', async () => {
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  const ontem = plan.diaUtilAnterior(hoje);
+  const op = '15102555';
+  // ontem: 1.º dia da ordem (continuava), com 1.000 rolhas aprovadas já levantadas; encomenda 3.000
+  await pool.query(`INSERT INTO ordens (op, encomenda) VALUES ($1, 3000)`, [op]);
+  await pool.query(`INSERT INTO ordens_dia (data, op, continua, aprovadas_final, levantada_em) VALUES ($1, $2, true, 1000, now())`, [ontem, op]);
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', contadeira: false, dsrol: false, rolhasPorFrasco: 2, ordem: op, frascos: 100 };
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, continua: false })).status, 400);                 // falta a encomenda
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, encomenda: 3000 })).status, 400);                 // falta "continua amanhã?"
+  const info = (await api('GET', `/api/ordem/${op}`)).body;
+  assert.deepStrictEqual([info.existe, info.encomenda, info.anteriores, info.continuavaOntem], [true, 3000, 1000, true]);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, encomenda: 3000, continua: false })).status, 200);
+  await fechadoHa(`${Lh}1`, 'Marta Santos', 60);
+  await fechadoHa(`${Lh}1`, 'Tânia Lino', 50);
+  assert.strictEqual((await api('POST', `/api/misu/${Lh}1`, { ordens: { [op]: { ligeiros: 5, fortes: 5, qvs: 2 } } })).status, 200);
+  const ord = async () => (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === op);
+  let o = await ord();
+  assert.deepStrictEqual([o.aprovadasDia, o.anteriores, o.acumulado, o.resultado, o.fase], [190, 1000, 1190, 'em_curso', 'pronta']);
+  assert.deepStrictEqual([o.qvs.misu, o.qvs.logistica, o.qvs.total], [2, 0, 2]);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/levantar', { op, qvs: 3 })).status, 200);
+  o = await ord();
+  assert.deepStrictEqual([o.resultado, o.falta], ['pendente', 1810]);                                              // 1.190 < 3.000 e não continua
+  // supervisora: precisa de palavra-passe; acrescenta rolhas ou aceita a falta
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem-resultado', { op, acao: 'aceitar' })).status, 401);
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem-resultado', { pin: '8126', op, acao: 'acrescentar', rolhas: 0 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem-resultado', { pin: '8126', op, acao: 'aceitar' })).status, 200);
+  assert.strictEqual((await ord()).resultado, 'ok_com_falta');
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem-resultado', { pin: '8126', op, acao: 'acrescentar', rolhas: 1810 })).status, 200);
+  o = await ord();
+  assert.deepStrictEqual([o.resultado, o.acumulado, o.rolhasAdicionais, o.aceiteFalta], ['ok', 3000, 1810, false]);
+  const lista = (await api('POST', '/api/supervisora/ordens', { pin: '8126' })).body.ordens.find((x) => x.op === op);
+  assert.deepStrictEqual([lista.resultado, lista.falta], ['ok', 0]);
+  // com "continua amanhã" fica em 1.º fecho (parcial), mesmo abaixo da encomenda
+  assert.strictEqual((await api('POST', '/api/supervisora/ordem', { pin: '8126', data: hoje, mesa: `${Lh}1`, op, continua: true })).status, 200);
+  await pool.query(`UPDATE ordens SET rolhas_adicionais = 0 WHERE op = $1`, [op]);
+  assert.strictEqual((await ord()).resultado, 'parcial');
 });
 
 test('identificação das ordens numa mesa partilhada: seq (A7-1, A7-2, ...) e proposta a avisar', async () => {
   const dia = proximoUtil();
   const L = plan.ladoDoDia(dia);
-  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, rolhasPorFrasco: 2 };
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, continua: false, encomenda: 100000, rolhasPorFrasco: 2 };
   const p1 = await api('POST', '/api/logistica/ordem/proposta', { ...base, ordem: '15007565', frascos: 95 });
   assert.deepStrictEqual([p1.body.segmentos[0].seq, p1.body.segmentos[0].jaTem], [1, 0]);
   await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15007565', frascos: 95 });
@@ -790,7 +846,7 @@ test('supervisora: ver, corrigir e apagar as provas de uma mesa', async () => {
 test('supervisora: editar uma ordem (frascos, rolhas, partidos, contadeira...) respeita a capacidade da mesa', async () => {
   const dia = proximoUtil();
   const L = plan.ladoDoDia(dia);
-  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, rolhasPorFrasco: 2 };
+  const base = { data: dia, tipo: 'EUR', contadeira: false, dsrol: false, continua: false, encomenda: 100000, rolhasPorFrasco: 2 };
   await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15007565', frascos: 95 });
   await api('POST', '/api/logistica/ordem/confirmar', { ...base, ordem: '15102480', frascos: 25 });
   const E = (b) => api('POST', '/api/supervisora/ordem', { pin: '8126', data: dia, mesa: `${L}1`, op: '15007565', ...b });
@@ -827,6 +883,26 @@ test('ordens de teste (sexta 23/10 → prova de hoje): carregam-se uma só vez, 
   const lv = (await api('GET', '/api/levantamento')).body.mesas;
   assert.strictEqual(lv.filter((m) => m.estadoProva === 'pronta').length, 9);   // todas as mesas com as provas feitas, prontas para o MISU
   assert.strictEqual(lv.filter((m) => m.fase === 'misu').length, 9);
+});
+
+test('sábado como dia útil por data (exceção da supervisora)', async () => {
+  const D = (b) => api('POST', '/api/supervisora/dias-extra', b);
+  let s = new Date(plan.hojeLisboa() + 'T00:00:00Z');
+  while (s.getUTCDay() !== 6) s = new Date(s.getTime() + 86400000);
+  const sab = s.toISOString().slice(0, 10);
+  assert.strictEqual((await D({ acao: 'listar' })).status, 401);
+  assert.strictEqual((await D({ pin: '8126', acao: 'adicionar', data: plan.hojeLisboa() === sab ? '2030-01-02' : plan.hojeLisboa() })).status, 400);   // não é sábado
+  assert.strictEqual((await D({ pin: '8126', acao: 'adicionar', data: '2020-01-04' })).status, 400);                                                      // sábado no passado
+  const r = await D({ pin: '8126', acao: 'adicionar', data: sab });
+  assert.strictEqual(r.status, 200);
+  assert.ok(r.body.extras.includes(sab));
+  const cal = (await api('GET', '/api/calendario')).body;
+  assert.ok(cal.extras.includes(sab));
+  // o dia útil seguinte passa a poder ser esse sábado (se for logo a seguir a hoje)
+  const doSab = new Date(sab + 'T00:00:00Z'), sexta = new Date(doSab.getTime() - 86400000).toISOString().slice(0, 10);
+  if (plan.hojeLisboa() === sexta) assert.strictEqual(cal.proximo, sab);
+  assert.strictEqual((await D({ pin: '8126', acao: 'remover', data: sab })).status, 200);
+  assert.ok(!(await api('GET', '/api/calendario')).body.extras.includes(sab));
 });
 
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {

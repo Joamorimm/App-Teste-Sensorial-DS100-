@@ -15,12 +15,16 @@ const parseISO = (s) => { const [y, m, d] = s.split('-').map(Number); return new
 function hojeLisboa() {
   return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' });
 }
+// Sábados incluídos como dia útil pela supervisora (exceção pontual). Carregados da base de dados pelo servidor.
+let DIAS_EXTRA = new Set();
+function definirDiasExtra(lista) { DIAS_EXTRA = new Set((lista || []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x) && parseISO(x).getUTCDay() === 6)); }
+const ehUtil = (d) => ![0, 6].includes(d.getUTCDay()) || (d.getUTCDay() === 6 && DIAS_EXTRA.has(iso(d)));
+const ehDiaUtil = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && ehUtil(parseISO(s));
 function diaUtilAnterior(s) {
   let d = parseISO(s);
-  do { d = new Date(d.getTime() - 86400000); } while ([0, 6].includes(d.getUTCDay()));
+  do { d = new Date(d.getTime() - 86400000); } while (!ehUtil(d));
   return iso(d);
 }
-const ehUtil = (d) => ![0, 6].includes(d.getUTCDay());
 // Lado da PROVA alterna de dia útil para dia útil (segunda a sexta): 21/10 = B, 22/10 = A, 23/10 = B, 26/10 = A...
 // A logística põe os frascos no lado A/B no dia anterior, para os provadores trabalharem esse lado no dia seguinte.
 // Fim de semana usa o último dia útil.
@@ -152,4 +156,4 @@ function gerarProposta(linhas, dataProva, ladoForcado) {
   };
 }
 
-module.exports = { inicioSeguinte, LAYOUT, MESAS, MESAS_POR_LADO, CAPACIDADE_LADO, hojeLisboa, diaUtilAnterior, diaUtilSeguinte, ladoDoDia, expandirIntervalos, lerPlaneamento, gerarProposta };
+module.exports = { definirDiasExtra, ehDiaUtil, inicioSeguinte, LAYOUT, MESAS, MESAS_POR_LADO, CAPACIDADE_LADO, hojeLisboa, diaUtilAnterior, diaUtilSeguinte, ladoDoDia, expandirIntervalos, lerPlaneamento, gerarProposta };

@@ -145,3 +145,16 @@ No primeiro arranque a app grava na base de dados as 6 ordens colocadas na sexta
 ## Dados de teste (colocação de sexta 23/10 para a prova de segunda 26/10)
 No menu da supervisora: **Carregar ordens de teste** (6 ordens, com a mesa 7 como no exemplo: 5 ordens na mesma mesa) ou **... com provas já feitas** (todas as mesas, menos a última, ficam prontas para o MISU/levantamento; a A7 tem 5 ordens).
 Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TESTE=1` e, se quiseres as provas feitas, `SEED_TESTE_PROVAS=1`. As ordens carregam-se para o dia de hoje no arranque (sem duplicar). Retira as variáveis quando acabarem os testes.
+
+## v56 · ordens de vários dias
+- Colocar: campos "Quantidade encomendada (rolhas)" e "A ordem continua amanhã?".
+- Se continua: a contadeira faz o 1.º fecho (parcial). O fecho final soma os dias; ≥ encomenda = OK, < = pendente para a supervisão (acrescentar rolhas ou aceitar a falta: Editar · supervisora → Ordens · encomenda e decisões).
+- Levantar tem duas vistas: Mesas · MISU e Ordens · logística. O levantamento e as QVs da logística são por ordem; o MISU aponta as QVs por ordem.
+- Sábado como dia útil por data: Editar · supervisora → Dias de trabalho.
+- Botão de reinício só na página principal.
+
+## v57
+- MISU conta em frascos (×1/2/4 rolhas), sem QVs, e fica bloqueado depois de guardado.
+- Logística: um só passo (QVs + levantar ordem); depois só a supervisora altera.
+- Fluxo: MISU → levantamento (logística) → contadeira (rolhas OK + ligeiras, tem de bater com a colocação).
+- Supervisora: Ordens · encomenda e decisões → reabrir MISU / levantamento / contagem.

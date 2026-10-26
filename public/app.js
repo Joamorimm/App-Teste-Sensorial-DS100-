@@ -14,7 +14,7 @@ function mostrarTela(id) {
   el(id).classList.add('ativa');
   const login = id === 'telaLogin';
   el('app').classList.toggle('modo-login', login);
-  el('btnRefresh').style.display = login ? '' : 'none';
+  el('btnRefresh').style.display = id === 'telaHome' ? '' : 'none';   // restart só na página principal
   const comContador = ['telaScanner', 'telaCheck', 'telaOpen'].includes(id) && estado.aprovador;
   el('contadorMesasWrap').style.display = comContador ? 'inline-flex' : 'none';
   const titulos = {
@@ -36,7 +36,13 @@ function dataPT(iso) { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`
 function isoLocal(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+// Calendário do servidor (segunda a sexta + sábados que a supervisora incluiu)
+let calendario = null;
+async function carregarCalendario() {
+  try { const r = await fetch('/api/calendario'); if (r.ok) calendario = await r.json(); } catch (e) { /* offline: usa o cálculo local */ }
+}
 function proximoDiaUtil() {
+  if (calendario && calendario.hoje === isoLocal(new Date())) return calendario.proximo;
   const d = new Date();
   do { d.setDate(d.getDate() + 1); } while ([0, 6].includes(d.getDay()));
   return isoLocal(d);
@@ -247,15 +253,15 @@ el('btnVoltar').onclick = () => {
 
 carregarAprovadores();
 
-el('btnRefresh').onclick = () => {
+el('btnRefresh').onclick = () => {   // restart da app (página principal)
   const b = el('btnRefresh');
   b.classList.remove('girar'); void b.offsetWidth; b.classList.add('girar');
-  carregarAprovadores();
+  setTimeout(() => location.reload(), 250);
 };
 
 // ---------- Home ----------
 el('tileProvadores').onclick = () => { el('buscaAprovador').value = ''; carregarAprovadores(); mostrarTela('telaLogin'); };
-el('tileLogistica').onclick = () => { mostrarTela('telaLogistica'); definirModo('colocar'); };
+el('tileLogistica').onclick = async () => { await carregarCalendario(); mostrarTela('telaLogistica'); definirModo('colocar'); };
 
 // ---------- Logística: levantar (hoje) e colocar mesas (amanhã) ----------
 let logDados = null;
@@ -274,10 +280,23 @@ async function carregarLogistica() {
     logDados = d;
     el('erroLog').textContent = '';
     renderLogistica();
+    if (logModo === 'levantar' && levVista === 'ordens') await renderOrdensLev();
   } catch (e) { el('erroLog').textContent = 'Não foi possível atualizar o mapa.'; }
 }
 
 let editDia = 'hoje';   // no menu da supervisora (colocação e levantamento): mesas de hoje ou de amanhã
+let levVista = 'mesas';   // no Levantar: 'mesas' (MISU) ou 'ordens' (logística)
+function aplicarVistaLev() {
+  const hub = logModo === 'editar';
+  const ordens = logModo === 'levantar' && levVista === 'ordens';
+  el('logTopo').style.display = hub || ordens ? 'none' : '';
+  el('logMapa').style.display = hub || ordens ? 'none' : '';
+  el('logResumoLev').style.display = !ordens && ['levantar', 'editarMesas', 'editarProvas'].includes(logModo) ? '' : 'none';
+  el('legLev').style.display = !ordens && ['levantar', 'editarMesas', 'editarProvas'].includes(logModo) ? '' : 'none';
+  el('levOrdens').style.display = ordens ? '' : 'none';
+  el('segVistaLev').querySelectorAll('button').forEach((b) => b.classList.toggle('ativa', b.dataset.v === levVista));
+}
+el('segVistaLev').querySelectorAll('button').forEach((b) => { b.onclick = () => { levVista = b.dataset.v; aplicarVistaLev(); carregarLogistica(); }; });
 function definirModo(modo, hojeTeste) {
   logModo = modo;
   colocarHoje = modo === 'colocar' && !!hojeTeste;
@@ -297,8 +316,8 @@ function definirModo(modo, hojeTeste) {
   el('legLev').style.display = modo === 'levantar' || modo === 'editarMesas' || modo === 'editarProvas' ? '' : 'none';
   el('legCol').style.display = modo === 'colocar' ? '' : 'none';
   el('colForm').style.display = modo === 'colocar' ? '' : 'none';
-  el('logTopo').style.display = hub ? 'none' : '';
-  el('logMapa').style.display = hub ? 'none' : '';
+  el('levVista').style.display = modo === 'levantar' ? '' : 'none';
+  aplicarVistaLev();
   if (estado.pollTimer) { clearInterval(estado.pollTimer); estado.pollTimer = null; }
   if (modo === 'levantar') estado.pollTimer = setInterval(carregarLogistica, 15000);
   limparMensagensCol();
@@ -359,6 +378,26 @@ el('btnHub').onclick = () => definirModo('editar');
 el('hubMesas').onclick = () => definirModo('editarMesas');
 el('hubProvas').onclick = () => definirModo('editarProvas');
 el('hubProvadores').onclick = () => folhaProvadores();
+el('hubDias').onclick = () => folhaDias();
+async function folhaDias(extras) {
+  try { if (!extras) extras = (await enviar('/api/supervisora/dias-extra', { pin: pinSessao, acao: 'listar' })).extras; }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  abrirFolha(`<h3>Dias de trabalho</h3>
+    <div class="aviso-hand">Por defeito são segunda a sexta. Aqui incluis um <b>sábado</b> como dia útil (exceção). O lado A/B continua a alternar pelos dias úteis, por isso o dia seguinte ao sábado muda de lado.</div>
+    <div class="sheet-campo"><label>Sábado a incluir</label><input type="date" id="diaNovo" /></div>
+    <button class="primario" id="diaAdd" style="margin-top:0;">Incluir este sábado</button>
+    ${extras.length ? extras.map((d) => `<div class="prop-linha"><b>${dataPT(d)}</b> · sábado de trabalho <button class="secundario" data-rm="${d}" style="margin-top:6px;">Tirar</button></div>`).join('') : '<div class="dica" style="margin-top:10px;">Nenhum sábado incluído.</div>'}
+    <button class="secundario" id="diaX">Fechar</button>
+    <div class="msg-erro" id="diaErro"></div>`);
+  el('diaX').onclick = fecharFolha;
+  const agir = async (corpo) => {
+    el('diaErro').textContent = '';
+    try { const r = await enviar('/api/supervisora/dias-extra', { pin: pinSessao, ...corpo }); await carregarCalendario(); folhaDias(r.extras); }
+    catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('diaErro').textContent = e.message; }
+  };
+  el('diaAdd').onclick = () => agir({ acao: 'adicionar', data: el('diaNovo').value });
+  el('sheetBox').querySelectorAll('button[data-rm]').forEach((b) => { b.onclick = () => agir({ acao: 'remover', data: b.dataset.rm }); });
+}
 el('segEditDia').querySelectorAll('button').forEach((b) => { b.onclick = () => { editDia = b.dataset.v; definirModo('editarMesas'); }; });
 
 function renderLogistica() {
@@ -404,8 +443,9 @@ function atualizarResumoCol() {
   if (proposta) cancelarProposta();   // mudou algo: a proposta deixa de valer
 }
 function limparFormColocacao() {
-  ['colOrdem', 'colTotal'].forEach((id) => { el(id).value = ''; });
-  ['segRolhas', 'segTipo', 'segContadeira', 'segDsrol'].forEach((id) => definirSeg(id, null));
+  ['colOrdem', 'colTotal', 'colEnc'].forEach((id) => { el(id).value = ''; });
+  ['segRolhas', 'segTipo', 'segContadeira', 'segDsrol', 'segContinua'].forEach((id) => definirSeg(id, null));
+  el('dicaEnc').textContent = 'Total da ordem, mesmo que continue noutros dias';
   proposta = null; selecionadas = new Set();
   el('colProposta').style.display = 'none'; el('colProposta').innerHTML = '';
   el('okCol').style.display = 'none'; el('erroCol').textContent = '';
@@ -420,7 +460,7 @@ function definirSeg(id, v) {
   el(id).querySelectorAll('button').forEach((b) => b.classList.toggle('ativa', b.dataset.v === v));
 }
 function valorSeg(id) { const b = el(id).querySelector('button.ativa'); return b ? b.dataset.v : null; }
-['segTipo', 'segRolhas', 'segContadeira', 'segDsrol'].forEach((id) => {
+['segTipo', 'segRolhas', 'segContadeira', 'segDsrol', 'segContinua'].forEach((id) => {
   el(id).querySelectorAll('button').forEach((b) => { b.onclick = () => { definirSeg(id, b.dataset.v); atualizarResumoCol(); }; });
 });
 function ordemValida(v) { return /^\d{6,12}$/.test(v) && PREFIXOS_OP.some((p) => v.startsWith(p)); }
@@ -432,7 +472,21 @@ function validarOrdem() {
   dica.textContent = mau ? 'Nº de ordem inválido: tem de começar por 150, 151 ou 950' : 'Tem de começar por 150, 151 ou 950';
 }
 el('colTotal').addEventListener('input', atualizarResumoCol);
-el('colOrdem').addEventListener('input', () => { el('colOrdem').value = el('colOrdem').value.replace(/\D/g, ''); validarOrdem(); if (proposta) cancelarProposta(); });
+el('colOrdem').addEventListener('input', () => { el('colOrdem').value = el('colOrdem').value.replace(/\D/g, ''); validarOrdem(); if (proposta) cancelarProposta(); infoOrdemExistente(); });
+let _infoTimer = null;
+function infoOrdemExistente() {   // ordem que já vem de outros dias: mostra o que já foi aprovado e a encomenda
+  clearTimeout(_infoTimer);
+  const op = el('colOrdem').value.trim();
+  if (!ordemValida(op)) { el('dicaEnc').textContent = 'Total da ordem, mesmo que continue noutros dias'; return; }
+  _infoTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('/api/ordem/' + op); const d = await r.json();
+      if (el('colOrdem').value.trim() !== op || !d.existe) return;
+      if (!el('colEnc').value) el('colEnc').value = d.encomenda;
+      el('dicaEnc').textContent = `Ordem já iniciada: encomenda ${fmt(d.encomenda)} rolhas · aprovadas em dias anteriores ${fmt(d.anteriores)}${d.rolhasAdicionais ? ' · acrescentadas ' + fmt(d.rolhasAdicionais) : ''}`;
+    } catch (e) { /* sem info */ }
+  }, 300);
+}
 
 function dadosOrdem() {
   const ordem = el('colOrdem').value.trim();
@@ -444,7 +498,10 @@ function dadosOrdem() {
   if (!tipo) throw new Error('Escolhe o tipo: EUR, GRUPO ou AMOSTRA.');
   if (!cont) throw new Error('Indica se tem contadeira (Sim ou Não).');
   if (!dsrol) throw new Error('Indica DSROL (Sim ou Não).');
-  return { data: dataLogistica(), ordem, frascos, rolhasPorFrasco: Number(rolhas), tipo, contadeira: cont === 'sim', dsrol: dsrol === 'sim', pin: colocarHoje ? pinSessao : undefined };
+  const encomenda = Number(el('colEnc').value), cc = valorSeg('segContinua');
+  if (!Number.isInteger(encomenda) || encomenda < 1) throw new Error('Indica a quantidade encomendada (nº de rolhas).');
+  if (!cc) throw new Error('Indica se a ordem continua amanhã (Sim ou Não).');
+  return { encomenda, continua: cc === 'sim', data: dataLogistica(), ordem, frascos, rolhasPorFrasco: Number(rolhas), tipo, contadeira: cont === 'sim', dsrol: dsrol === 'sim', pin: colocarHoje ? pinSessao : undefined };
 }
 el('btnCalcular').onclick = async () => {
   limparMensagensCol();
@@ -481,10 +538,8 @@ async function confirmarOrdem() {
   el('btnConfirmarOrdem').disabled = true;
   try {
     const r = await enviar('/api/logistica/ordem/confirmar', { ...dados, distribuicao });
-    el('okCol').textContent = `Colocada: OP ${dados.ordem} em ${r.mesas.join(', ')}.`;
-    el('okCol').style.display = '';
     limparFormColocacao();           // cada introdução começa limpa
-    el('okCol').textContent = `Colocada: OP ${dados.ordem} em ${r.mesas.join(', ')}.`;
+    el('okCol').textContent = `Colocada: OP ${dados.ordem} em ${r.mesas.join(', ')}${dados.continua ? ' (continua amanhã)' : ''}.`;
     el('okCol').style.display = '';
     await carregarLogistica();
   } catch (e) { el('erroCol').textContent = e.message; if (/palavra-passe/i.test(e.message)) pinSessao = null; if (el('btnConfirmarOrdem')) el('btnConfirmarOrdem').disabled = false; }
@@ -561,6 +616,7 @@ async function carregarLevantamento() {
   if (!r.ok) throw new Error(d.erro || 'Erro');
   levDados = d.mesas;
   levOps = d.ops || [];
+  levOrdens = d.ordens || [];
   return levDados;
 }
 
@@ -584,11 +640,11 @@ function linhasRolhas(m) {
 
 function cartaoOp(o) {
   const ativo = o.estado === 'por_contar' || o.estado === 'feito';
-  const rot = { aguardar_provas: `A aguardar provas ${o.prontas}/${o.nMesas} mesas`, aguardar_misu: `A aguardar MISU ${o.entregues}/${o.nMesas} mesas`, por_contar: 'Por contar', feito: 'Feito' }[o.estado];
-  const cl = { aguardar_provas: 'aguardar', aguardar_misu: 'aguardar', por_contar: 'fazer', feito: 'feito' }[o.estado];
+  const rot = { aguardar_provas: `A aguardar provas ${o.prontas}/${o.nMesas} mesas`, aguardar_misu: `A aguardar MISU ${o.entregues}/${o.nMesas} mesas`, aguardar_levantamento: 'A aguardar levantamento', por_contar: 'Por contar', feito: 'Feito' }[o.estado];
+  const cl = { aguardar_provas: 'aguardar', aguardar_misu: 'aguardar', aguardar_levantamento: 'aguardar', por_contar: 'fazer', feito: 'feito' }[o.estado];
   return `<div class="cartao-lev${ativo ? '' : ' desativada'}${o.estado === 'por_contar' ? ' pendente' : ''}" data-op="${o.op}">
     <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
-    <div class="meta">Mesas: ${o.mesas.join(', ')} · ${fmt(o.totalRolhas)} rolhas${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>Frascos partidos ${fmt(o.frascosPartidos)} (${fmt(o.rolhasPartidas)} rolhas)</div>
+    <div class="meta">${o.continua ? '<b>1.º fecho</b> (continua amanhã) · ' : ''}Mesas: ${o.mesas.join(', ')} · ${fmt(o.totalRolhas)} rolhas${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>Frascos partidos ${fmt(o.frascosPartidos)} (${fmt(o.rolhasPartidas)} rolhas)</div>
   </div>`;
 }
 
@@ -600,7 +656,7 @@ async function abrirPerfil() {
   try {
     await carregarLevantamento();
     if (!levOps.length) { lista.innerHTML = '<div class="chips-vazio">Sem OPs que vão à contadeira hoje.</div>'; return; }
-    const peso = { por_contar: 0, feito: 1, aguardar_misu: 2, aguardar_provas: 3 };
+    const peso = { por_contar: 0, feito: 1, aguardar_levantamento: 2, aguardar_misu: 3, aguardar_provas: 4 };
     const ops = levOps.slice().sort((a, b) => peso[a.estado] - peso[b.estado]);
     lista.innerHTML = ops.map(cartaoOp).join('');
     lista.querySelectorAll('.cartao-lev').forEach((c) => {
@@ -622,43 +678,151 @@ async function enviar(url, corpo) {
   return d;
 }
 
+
+// ----- Levantar · vista ORDENS (logística): o levantamento faz-se à ordem, com as QVs -----
+let levOrdens = [];
+const FASE_ORD = { em_prova: ['em prova', 'aguardar'], misu: ['MISU', 'aguardar'], pronta: ['por levantar', 'fazer'], levantada: ['levantada', 'feito'] };
+function textoResultado(o) {
+  if (o.fase !== 'levantada') return '';
+  if (o.aguardaContadeira) return 'Levantada · a aguardar a contadeira';
+  if (o.resultado === 'parcial') return `1.º fecho · a ordem continua amanhã (${fmt(o.acumulado)} de ${fmt(o.encomenda)} rolhas)`;
+  if (o.resultado === 'ok') return `OK · ${fmt(o.acumulado)} de ${fmt(o.encomenda)} rolhas encomendadas`;
+  if (o.resultado === 'ok_com_falta') return `Fechada com falta aceite pela supervisão (${fmt(o.acumulado)} de ${fmt(o.encomenda)})`;
+  if (o.resultado === 'pendente') return `Pendente · faltam ${fmt(o.falta)} rolhas · decisão da supervisão`;
+  return '';
+}
+function cartaoOrdemLev(o) {
+  const [rot, cl] = FASE_ORD[o.fase] || [o.fase, 'aguardar'];
+  const res = textoResultado(o);
+  return `<div class="cartao-lev${o.fase === 'pronta' ? ' pendente' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
+    <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
+    <div class="meta">Mesas: ${o.mesas.join(', ')} · ${fmt(o.rolhas)} rolhas${o.continua ? ' · continua amanhã' : ''}<br/>Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${res ? '<br/><b>' + res + '</b>' : ''}</div>
+  </div>`;
+}
+async function renderOrdensLev() {
+  await carregarLevantamento();
+  const box = el('levOrdens');
+  const peso = { pronta: 0, levantada: 2, misu: 4, em_prova: 5 };
+  const lista = levOrdens.slice().sort((a, b) => (peso[a.fase] - peso[b.fase]) || a.op.localeCompare(b.op));
+  box.innerHTML = lista.length ? lista.map(cartaoOrdemLev).join('') : '<div class="chips-vazio">Sem ordens colocadas hoje.</div>';
+  box.querySelectorAll('.cartao-lev').forEach((c) => { c.onclick = () => folhaOrdem(c.dataset.op); });
+}
+function folhaOrdem(op) {
+  const o = levOrdens.find((x) => x.op === op);
+  if (!o) return;
+  const q = o.qvs;
+  const lev = o.fase === 'levantada';
+  const pode = o.fase === 'pronta' || lev;
+  const rp = (g) => g.rolhasPorFrasco || 1;
+  const linhasSeg = o.segmentos.map((g) => `<b>${g.seqRotulo || g.mesa}</b> · ${fmt(g.frascos)} frascos × ${rp(g)} = ${fmt(g.rolhas)} rolhas${g.rolhasPartidas ? ` · partidas ${fmt(g.rolhasPartidas)}` : ''}${g.fortes !== null && g.fortes !== undefined ? ` · MISU: ${g.contadeira ? '' : fmt(g.ligeiros || 0) + ' lig. · '}${fmt(g.fortes)} fortes (rolhas)` : ''}`).join('<br/>');
+  const apr = o.aprovadasDia;
+  const fase = { em_prova: 'Ainda há mesas desta ordem em prova.', misu: 'A aguardar o MISU em todas as mesas desta ordem.' }[o.fase] || '';
+  const bloqAprov = !o.contadeira && apr !== null && pode;
+  abrirFolha(`<h3>OP ${o.op}</h3>
+    <div class="bloco-rolhas">${linhasSeg}<br/>
+      Total da ordem: <b>${fmt(o.rolhas)}</b> rolhas · ${o.tipo}${o.contadeira ? ' · vai à contadeira' : ' · sem contadeira'}${o.continua ? ' · continua amanhã' : ''}</div>
+    ${fase ? `<div class="aviso-hand">${fase}</div>` : ''}
+    ${bloqAprov ? `<div class="bloco-rolhas">Aprovadas hoje: <b>${fmt(apr)}</b> (total − ligeiras − fortes − partidas)<br/>
+      Encomenda <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''} · hoje ${fmt(apr)} = <b>${fmt(o.acumulado)}</b><br/>
+      ${o.continua ? '<b>1.º fecho</b> · a ordem continua amanhã' : (o.acumulado >= o.encomenda ? '<b>OK</b> · encomenda cumprida' : `<b>Faltam ${fmt(o.falta)} rolhas</b> · fica pendente para a supervisão`)}</div>` : ''}
+    ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro e a contadeira conta depois.</div>' : ''}
+    ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>Levantamento registado: só a supervisora pode alterar.</div>` : ''}
+    ${o.fase === 'pronta' ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
+      <button class="primario" id="ordLev" style="margin-top:10px;">Guardar QVs e levantar ordem</button>` : ''}
+    <button class="secundario" id="ordX">Fechar</button>
+    <div class="msg-erro" id="ordErro"></div>`);
+  const somar = () => {
+    if (!el('ordQvs')) return;
+    const l = lerNum('ordQvs') || 0;
+    el('ordSoma').textContent = `QVs: colocação ${fmt(q.colocacao)} + logística ${fmt(l)} = ${fmt(q.colocacao + l)} rolhas`;
+  };
+  if (el('ordQvs')) { el('ordQvs').oninput = somar; somar(); }
+  el('ordX').onclick = fecharFolha;
+  if (el('ordLev')) el('ordLev').onclick = async () => {
+    el('ordErro').textContent = '';
+    if (lerNum('ordQvs') === undefined) { el('ordErro').textContent = 'Indica as QVs (escreve 0 se não houver).'; return; }
+    try {
+      await enviar('/api/logistica/ordem/levantar', { op: o.op, qvs: lerNum('ordQvs') });
+      fecharFolha(); await renderOrdensLev(); carregarLogistica();
+    } catch (e) { el('ordErro').textContent = e.message; }
+  };
+}
+
+// ----- Supervisora: ordens · encomenda e decisões (acrescentar rolhas ou aceitar a falta) -----
+const RES_TXT = { em_curso: 'em curso', parcial: '1.º fecho · continua', ok: 'OK', ok_com_falta: 'falta aceite', pendente: 'PENDENTE' };
+async function folhaOrdensSup(lista) {
+  try { if (!lista) lista = (await enviar('/api/supervisora/ordens', { pin: pinSessao })).ordens; }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  const ord = lista.slice().sort((a, b) => (b.resultado === 'pendente') - (a.resultado === 'pendente') || a.op.localeCompare(b.op));
+  const blocos = ord.map((o) => `<div class="prop-linha ${o.resultado === 'pendente' ? 'pendente' : ''}">
+    <div><b>OP ${o.op}</b> · <b>${RES_TXT[o.resultado] || o.resultado}</b><br/>Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${o.falta ? ' · <b>faltam ' + fmt(o.falta) + '</b>' : ''}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''}</div>
+    <div class="prop-campos"><label>Rolhas<input type="number" inputmode="numeric" min="1" class="osN" data-op="${o.op}" placeholder="nº" /></label></div>
+    <button class="secundario" data-a="acrescentar" data-op="${o.op}" style="margin-top:6px;">Acrescentar rolhas à encomenda</button>
+    <button class="secundario" data-a="encomenda" data-op="${o.op}" style="margin-top:6px;">Alterar a quantidade encomendada</button>
+    ${o.resultado === 'pendente' ? `<button class="primario" data-a="aceitar" data-op="${o.op}" style="margin-top:6px;">Aceitar a falta (${fmt(o.falta)})</button>` : ''}
+    ${o.faseHoje === 'pronta' ? `<button class="secundario" data-a="reabrir_misu" data-op="${o.op}" style="margin-top:6px;">Reabrir o MISU de hoje</button>` : ''}
+    ${o.faseHoje === 'levantada' ? `<button class="secundario" data-a="reabrir_levantamento" data-op="${o.op}" style="margin-top:6px;">Desfazer o levantamento de hoje</button>` : ''}
+    ${o.contadaHoje ? `<button class="secundario" data-a="reabrir_contagem" data-op="${o.op}" style="margin-top:6px;">Reabrir a contagem da contadeira</button>` : ''}
+    ${o.resultado === 'ok_com_falta' ? `<button class="secundario" data-a="reabrir" data-op="${o.op}" style="margin-top:6px;">Reabrir (deixar pendente)</button>` : ''}
+  </div>`).join('');
+  abrirFolha(`<h3>Ordens · encomenda e decisões</h3>${blocos || '<div class="aviso-hand">Ainda não há ordens.</div>'}
+    <button class="secundario" id="osX">Fechar</button><div class="msg-erro" id="osErro"></div>`);
+  el('osX').onclick = fecharFolha;
+  el('sheetBox').querySelectorAll('button[data-a]').forEach((b) => {
+    b.onclick = async () => {
+      const op = b.dataset.op, a = b.dataset.a;
+      if (/^reabrir_/.test(a) && !confirm('Confirmas?')) return;
+      const n = el('sheetBox').querySelector(`.osN[data-op="${op}"]`).value.trim();
+      const corpo = { pin: pinSessao, op, acao: a };
+      if (a === 'acrescentar') corpo.rolhas = Number(n);
+      if (a === 'encomenda') corpo.encomenda = Number(n);
+      try { const r = await enviar('/api/supervisora/ordem-resultado', corpo); folhaOrdensSup(r.ordens); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('osErro').textContent = e.message; }
+    };
+  });
+}
+el('hubOrdens').onclick = () => folhaOrdensSup();
+
 // ----- MISU (trabalha à mesa) -----
 // O MISU aponta SEMPRE os contaminados (aroma ligeiro e forte). Só depois a mesa segue: para a contadeira (se
 // a colocação disser que sim) ou para a logística (que subtrai ao total da mesa).
 function folhaMisuOrdens(m) {
   const segs = m.segmentos;
-  const entregue = m.contadeira && m.misuEstado === 'entregue';
+  const bloq = !!m.misuEm;   // depois de registado, só a supervisora altera
+  const rpf = (g) => g.rolhasPorFrasco || 1;
   const blocos = segs.map((g, i) => `<div class="prop-linha">
-    <div><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> · ${fmt(g.rolhas)} rolhas (${fmt(g.frascos)} frascos × ${g.rolhasPorFrasco}) · <b>${g.contadeira ? 'vai à contadeira' : 'não vai à contadeira'}</b>${g.rolhasPartidas ? ` · partidas ${fmt(g.rolhasPartidas)}` : ''}</div>
-    ${g.contadeira ? '' : campoNum('misuLig' + i, 'Rolhas de aroma ligeiro', g.ligeiros, entregue)}
-    ${campoNum('misuFor' + i, 'Rolhas de aroma forte', g.fortes, entregue)}
-    ${g.contadeira ? '<div class="dica">Com contadeira o MISU conta só os fortes; os ligeiros são da contadeira.</div>' : '<div class="soma-qv" id="misuApr' + i + '"></div>'}
+    <div><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> · ${fmt(g.frascos)} frascos × ${rpf(g)} rolhas = ${fmt(g.rolhas)} rolhas · <b>${g.contadeira ? 'vai à contadeira' : 'não vai à contadeira'}</b>${g.frascosPartidos ? ` · partidos ${fmt(g.frascosPartidos)} frascos` : ''}</div>
+    ${g.contadeira ? '' : campoNum('misuLig' + i, 'Frascos de aroma ligeiro', g.ligeiros === null || g.ligeiros === undefined ? '' : g.ligeiros / rpf(g), bloq)}
+    ${campoNum('misuFor' + i, 'Frascos de aroma forte', g.fortes === null || g.fortes === undefined ? '' : g.fortes / rpf(g), bloq)}
+    <div class="soma-qv" id="misuApr${i}"></div>
+    ${g.contadeira ? '<div class="dica">Com contadeira o MISU conta só os fortes; os ligeiros são da contadeira.</div>' : ''}
   </div>`).join('');
   abrirFolha(`<h3>Mesa ${m.mesa}</h3>${linhasRolhas(m)}
-    ${entregue ? '<div class="aviso-hand">Mesa entregue à contadeira. A responsabilidade passou para a contadeira e já não pode ser alterada aqui.</div>' : '<div class="aviso-hand">O MISU trabalha à mesa, mas aponta por ordem: o que vai à contadeira só conta fortes; o resto conta ligeiros e fortes.</div>'}
+    ${bloq ? '<div class="aviso-hand">MISU já registado. Só a supervisora pode alterar.</div>' : '<div class="aviso-hand">O MISU conta em FRASCOS: a app multiplica pelas rolhas por frasco (1, 2 ou 4). Trabalha à mesa, mas aponta por ordem.</div>'}
     ${blocos}
-    ${campoNum('misuQvs', 'QVs · qualidade visual (nº de rolhas)', m.qvs.misu || '', entregue)}
-    ${entregue ? '' : `<button class="primario" id="misuOk">${m.contadeira ? 'Guardar e entregar à contadeira' : 'Guardar'}</button>`}
+    ${bloq ? '' : '<button class="primario" id="misuOk">Guardar</button>'}
     <button class="secundario" id="misuX">Fechar</button>
     <div class="msg-erro" id="misuErro"></div>`);
   el('misuX').onclick = fecharFolha;
   const atualizar = () => segs.forEach((g, i) => {
-    if (g.contadeira || !el('misuApr' + i)) return;
-    const l = lerNum('misuLig' + i) || 0, f = lerNum('misuFor' + i) || 0;
-    el('misuApr' + i).innerHTML = `${fmt(g.rolhas)} − ${fmt(l)} ligeiras − ${fmt(f)} fortes − ${fmt(g.rolhasPartidas)} partidas = <b>${fmt(g.rolhas - l - f - g.rolhasPartidas)} aprovadas</b>`;
+    const l = el('misuLig' + i) ? (lerNum('misuLig' + i) || 0) : 0, f = lerNum('misuFor' + i) || 0, r = rpf(g);
+    el('misuApr' + i).innerHTML = (g.contadeira ? '' : `${fmt(l)} frascos ligeiros × ${r} = ${fmt(l * r)} rolhas<br/>`) + `${fmt(f)} frascos fortes × ${r} = ${fmt(f * r)} rolhas`;
   });
   segs.forEach((g, i) => { if (el('misuLig' + i)) el('misuLig' + i).oninput = atualizar; el('misuFor' + i).oninput = atualizar; });
   atualizar();
-  if (entregue) return;
+  if (bloq) return;
   el('misuOk').onclick = async () => {
     el('misuErro').textContent = '';
     const ordens = {};
     for (let i = 0; i < segs.length; i++) {
-      const g = segs[i];
-      if (lerNum('misuFor' + i) === undefined || (!g.contadeira && lerNum('misuLig' + i) === undefined)) { el('misuErro').textContent = `Ordem ${g.op}: ${g.contadeira ? 'aponta as rolhas de aroma forte' : 'aponta as rolhas de aroma ligeiro e de aroma forte'} (pode ser 0).`; return; }
-      ordens[g.op] = { ligeiros: g.contadeira ? undefined : lerNum('misuLig' + i), fortes: lerNum('misuFor' + i) };
+      const g = segs[i], r = rpf(g);
+      const f = lerNum('misuFor' + i), l = el('misuLig' + i) ? lerNum('misuLig' + i) : 0;
+      if (f === undefined || l === undefined) { el('misuErro').textContent = `Ordem ${g.op}: aponta os frascos de aroma ${g.contadeira ? 'forte' : 'ligeiro e forte'} (pode ser 0).`; return; }
+      if (!Number.isInteger(f) || !Number.isInteger(l) || f < 0 || l < 0) { el('misuErro').textContent = `Ordem ${g.op}: indica frascos inteiros.`; return; }
+      if (f + l > g.frascos) { el('misuErro').textContent = `Ordem ${g.op}: ${f + l} frascos contaminados é mais do que os ${g.frascos} frascos da ordem nesta mesa.`; return; }
+      ordens[g.op] = { ligeiros: g.contadeira ? undefined : l * r, fortes: f * r };
     }
-    try { await enviar('/api/misu/' + m.mesa, { ordens, qvs: lerNum('misuQvs') }); fecharFolha(); carregarLogistica(); }
+    try { await enviar('/api/misu/' + m.mesa, { ordens }); fecharFolha(); carregarLogistica(); }
     catch (e) { el('misuErro').textContent = e.message; }
   };
 }
@@ -706,28 +870,26 @@ function folhaMisu(m) {
 
 // ----- Contadeira (trabalha à OP) -----
 function folhaContadeira(o) {
+  const feito = o.aprovadas !== null && o.aprovadas !== undefined;
   abrirFolha(`<h3>Contadeira · OP ${o.op}</h3>
     <div class="bloco-rolhas">Mesas da OP: <b>${o.mesas.join(', ')}</b><br/>
-      Total de rolhas: <b>${fmt(o.totalRolhas)}</b>${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>
-      Aromas fortes (apontados pelo MISU): <b>${fmt(o.fortes)}</b> · os ligeiros são contados pela contadeira<br/>
-      Frascos partidos: <b>${fmt(o.frascosPartidos)}</b> (${fmt(o.rolhasPartidas)} rolhas)</div>
-    <p class="intro" style="margin-top:0;">Valor contado pela máquina para a OP (nº de rolhas)</p>
-    ${campoNum('contApr', 'Rolhas aprovadas (OK)', o.aprovadas)}
-    <div class="soma-qv" id="contConta"></div>
-    <button class="primario" id="contOk">Guardar</button>
+      Total de rolhas: <b>${fmt(o.totalRolhas)}</b><br/>
+      Aromas fortes (MISU): <b>${fmt(o.fortes)}</b> rolhas · Partidas: <b>${fmt(o.rolhasPartidas)}</b> rolhas (${fmt(o.frascosPartidos)} frascos)
+      ${o.encomenda ? `<br/>Encomenda: <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}` : ''}
+      ${o.continua ? '<br/><b>1.º fecho</b> · a ordem continua amanhã (não é o fecho final)' : ''}</div>
+    ${feito ? '<div class="aviso-hand">Contagem registada. Só a supervisora pode alterar.</div>' : '<p class="intro" style="margin-top:0;">Valores contados pela máquina para a OP (nº de rolhas)</p>'}
+    ${campoNum('contApr', 'Rolhas OK (aprovadas)', o.aprovadas, feito)}
+    ${campoNum('contLig', 'Rolhas ligeiras', o.ligeirasContadas, feito)}
+    ${feito ? '' : '<button class="primario" id="contOk">Guardar</button>'}
     <button class="secundario" id="contX">Fechar</button>
     <div class="msg-erro" id="contErro"></div>`);
-  const contaOp = () => {
-    const a = lerNum('contApr');
-    el('contConta').innerHTML = a === undefined ? '' : `${fmt(o.totalRolhas)} total − ${fmt(a)} aprovadas − ${fmt(o.fortes)} fortes − ${fmt(o.rolhasPartidas)} partidas = <b>${fmt(o.totalRolhas - a - o.fortes - o.rolhasPartidas)} ligeiras</b> (por diferença)`;
-  };
-  el('contApr').oninput = contaOp; contaOp();
   el('contX').onclick = fecharFolha;
+  if (feito) return;
   el('contOk').onclick = async () => {
     el('contErro').textContent = '';
-    if (lerNum('contApr') === undefined) { el('contErro').textContent = 'Indica as rolhas aprovadas contadas pela máquina.'; return; }
+    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined) { el('contErro').textContent = 'Indica as rolhas OK e as rolhas ligeiras (0 se não houver).'; return; }
     try {
-      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr') });
+      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig') });
       fecharFolha(); abrirPerfil();
     } catch (e) { el('contErro').textContent = e.message; }
   };
@@ -739,6 +901,7 @@ async function folhaLogistica(codigo) {
   try { await carregarLevantamento(); m = levDados.find((x) => x.mesa === codigo); } catch (e) { return; }
   if (!m) return;
   const pronta = m.estadoProva === 'pronta' || m.estadoProva === 'levantada';
+  const seg = (m.segmentos || []).length > 0;
   let bloco;
   if ((m.segmentos || []).length) {
     bloco = m.segmentos.map((g) => {
@@ -763,11 +926,11 @@ async function folhaLogistica(codigo) {
     ${linhasRolhas(m)}
     ${pronta && m.desvio ? `<div class="aviso-hand">${m.desvio}</div>` : pronta ? '<div class="bloco-rolhas">Confere com a colocação.</div>' : ''}
     ${pronta ? `<div class="bloco-rolhas">${bloco}</div>
-      ${campoNum('logQvs', 'QVs da logística · qualidade visual (nº de rolhas)', q.logistica || '')}
-      <div class="soma-qv" id="logSoma"></div>` : `<div class="aviso-hand">Ainda não pode ser levantada: ${m.feitos} de ${m.necessarios} provadores concluíram.</div>`}
-    ${pronta ? '<button class="secundario" id="logGuardar" style="margin-top:0;">Guardar QVs</button>' : ''}
-    ${m.estadoProva === 'pronta' ? '<button class="primario" id="logLev" style="margin-top:10px;">Marcar como levantada</button>' : ''}
-    ${m.estadoProva === 'levantada' ? '<button class="primario" id="logLev" style="margin-top:10px;">Desfazer levantamento</button>' : ''}
+      ${seg ? '' : campoNum('logQvs', 'QVs da logística · qualidade visual (nº de rolhas)', q.logistica || '') + '<div class="soma-qv" id="logSoma"></div>'}` : `<div class="aviso-hand">Ainda não pode ser levantada: ${m.feitos} de ${m.necessarios} provadores concluíram.</div>`}
+    ${seg ? '<div class="aviso-hand">O levantamento e as QVs da logística fazem-se pela ORDEM: separador Levantar → «Ordens · logística».</div>' : ''}
+    ${pronta && !seg ? '<button class="secundario" id="logGuardar" style="margin-top:0;">Guardar QVs</button>' : ''}
+    ${seg ? '' : m.estadoProva === 'pronta' ? '<button class="primario" id="logLev" style="margin-top:10px;">Marcar como levantada</button>' : ''}
+    ${seg ? '' : m.estadoProva === 'levantada' ? '<button class="primario" id="logLev" style="margin-top:10px;">Desfazer levantamento</button>' : ''}
     <button class="secundario" id="logX">Fechar</button>
     <div class="msg-erro" id="logErro"></div>`);
   const somar = () => {
@@ -848,6 +1011,8 @@ function htmlEditorOrdens(m) {
     ${optSel('eoTipo' + i, 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
     ${optSel('eoCont' + i, 'Contadeira', sn, g.contadeira ? 1 : 0)}
     ${optSel('eoDsrol' + i, 'DSROL', sn, g.dsrol ? 1 : 0)}
+    ${campoNum('eoEnc' + i, 'Quantidade encomendada (rolhas)', g.encomenda)}
+    ${optSel('eoCm' + i, 'Continua amanhã', sn, g.continua ? 1 : 0)}
     <button class="secundario" id="eoSave${i}">Guardar esta ordem</button></div>`).join('');
 }
 function ligarEditorOrdens(m, data, recarregar) {
@@ -857,7 +1022,7 @@ function ligarEditorOrdens(m, data, recarregar) {
       try {
         await enviar('/api/supervisora/ordem', { pin: pinSessao, data, mesa: m.mesa, op: g.op, novaOrdem: el('eoOp' + i).value.trim(),
           frascos: lerNum('eoFr' + i), rolhasPorFrasco: Number(el('eoRol' + i).value), frascosPartidos: lerNum('eoPart' + i) ?? 0, qvs: lerNum('eoQv' + i) ?? 0,
-          tipo: el('eoTipo' + i).value, contadeira: el('eoCont' + i).value === '1', dsrol: el('eoDsrol' + i).value === '1' });
+          tipo: el('eoTipo' + i).value, contadeira: el('eoCont' + i).value === '1', dsrol: el('eoDsrol' + i).value === '1', encomenda: lerNum('eoEnc' + i), continua: el('eoCm' + i).value === '1' });
         carregarLogistica(); recarregar();
       } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }
     };

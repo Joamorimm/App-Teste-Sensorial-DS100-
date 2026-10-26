@@ -16,6 +16,8 @@ async function limpar() {
   await pool.query('DELETE FROM registos');
   await pool.query('DELETE FROM lotes');
   await pool.query('DELETE FROM lote_ops');
+  await pool.query('DELETE FROM ordens_dia');
+  await pool.query('DELETE FROM ordens');
 }
 const hoje = plan.hojeLisboa;
 function lote(mesa, n = 2, ordem = 'OP1') {
