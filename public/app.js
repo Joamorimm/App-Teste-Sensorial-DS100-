@@ -95,6 +95,10 @@ async function selecionarAprovador(nome) {
   mostrarTela('telaScanner');
 }
 
+let _diaContador = isoLocal(new Date());
+// à meia-noite os contadores zeram: volta a ler o valor do servidor quando o dia muda ou a app volta ao primeiro plano
+setInterval(() => { const h = isoLocal(new Date()); if (h !== _diaContador) { _diaContador = h; atualizarContador(); } }, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { _diaContador = isoLocal(new Date()); atualizarContador(); } });
 async function atualizarContador() {
   if (!estado.aprovador) return;
   try {
@@ -348,7 +352,6 @@ function pedirPin() {
   });
 }
 el('abaColocar').onclick = () => definirModo('colocar');   // sem palavra-passe: a logística coloca as mesas de amanhã
-el('btnColocarHoje').onclick = () => definirModo('colocar', true);
 el('btnHistorico').onclick = async () => {
   try {
     const r = await fetch('/api/supervisora/movimentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: pinSessao }) });
@@ -358,18 +361,25 @@ el('btnHistorico').onclick = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   } catch (e) { el('erroLog').textContent = e.message; }
 };
-const semear = (provas) => async () => {
-  el('erroLog').textContent = '';
-  try { const r = await enviar('/api/supervisora/seed-teste', { pin: pinSessao, provas }); alert(`Ordens de teste carregadas para ${dataPT(r.data)} (lado ${r.lado}): ${r.mesas} mesas.`); }
-  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('erroLog').textContent = e.message; }
-};
-el('btnSeed').onclick = semear(false);
-el('btnSeedProvas').onclick = semear(true);
-el('btnReset').onclick = async () => {
-  if (!confirm('Apagar TODAS as mesas, provas e levantamentos? Só para limpar dados de teste.')) return;
-  try { await enviar('/api/supervisora/reset', { pin: pinSessao, confirmar: 'APAGAR' }); carregarLogistica(); alert('Dados de teste apagados.'); }
-  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('erroLog').textContent = e.message; }
-};
+async function folhaVersoes() {
+  let lista;
+  try { lista = (await enviar('/api/supervisora/versoes', { pin: pinSessao })).versoes; }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  abrirFolha(`<h3>Restaurar versão anterior</h3>
+    <div class="aviso-hand">Volta aos dados (mesas, ordens, provas, MISU, contadeira, levantamentos) tal como estavam nessa hora. Antes de restaurar, a app guarda o estado atual (podes voltar atrás). O histórico de movimentos mantém-se.</div>
+    ${lista.length ? lista.map((v) => `<div class="prop-linha"><b>${v.quando}</b> · ${esc(v.motivo || '')}<br/><small>${esc(v.resumo || '')}</small>
+      <button class="secundario" data-v="${v.id}" style="margin-top:6px;">Restaurar esta versão</button></div>`).join('') : '<div class="aviso-hand">Ainda não há versões guardadas.</div>'}
+    <button class="secundario" id="vsX">Fechar</button><div class="msg-erro" id="vsErro"></div>`);
+  el('vsX').onclick = fecharFolha;
+  el('sheetBox').querySelectorAll('button[data-v]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Restaurar esta versão? Os dados atuais serão substituídos (fica uma cópia do estado atual).')) return;
+      try { await enviar('/api/supervisora/versoes/restaurar', { pin: pinSessao, id: Number(b.dataset.v) }); fecharFolha(); alert('Versão restaurada.'); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('vsErro').textContent = e.message; }
+    };
+  });
+}
+el('hubVersoes').onclick = () => folhaVersoes();
 el('abaEditar').onclick = async () => {                     // só a supervisora, com palavra-passe
   if (!pinSessao && !(await pedirPin())) return;
   definirModo('editar');
@@ -658,14 +668,26 @@ async function abrirPerfil() {
     if (!levOps.length) { lista.innerHTML = '<div class="chips-vazio">Sem OPs que vão à contadeira hoje.</div>'; return; }
     const peso = { por_contar: 0, feito: 1, aguardar_levantamento: 2, aguardar_misu: 3, aguardar_provas: 4 };
     const ops = levOps.slice().sort((a, b) => peso[a.estado] - peso[b.estado]);
-    lista.innerHTML = ops.map(cartaoOp).join('');
+    if (!el('contBusca')) {
+      const inp = document.createElement('input'); inp.type = 'search'; inp.id = 'contBusca'; inp.placeholder = 'Procurar OP'; inp.inputMode = 'numeric'; inp.autocomplete = 'off'; inp.style.marginBottom = '10px';
+      lista.parentNode.insertBefore(inp, lista);
+      inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); abrirPerfil(); };
+    }
+    const q = el('contBusca').value;
+    const vis = ops.filter((o) => o.op.includes(q));
+    lista.innerHTML = vis.length ? vis.map(cartaoOp).join('') : '<div class="chips-vazio">Nenhuma OP encontrada.</div>';
     lista.querySelectorAll('.cartao-lev').forEach((c) => {
       c.onclick = () => { if (!c.classList.contains('desativada')) folhaContadeira(levOps.find((x) => x.op === c.dataset.op)); };
     });
   } catch (e) { erro.textContent = 'Não foi possível carregar.'; }
 }
 
-function abrirFolha(html) { el('sheetBox').innerHTML = html; el('modalSheet').style.display = 'flex'; }
+function abrirFolha(html) {
+  el('sheetBox').innerHTML = '<div class="sheet-topo"><button type="button" id="sheetFecharTopo">Fechar ✕</button></div>' + html;
+  el('sheetFecharTopo').onclick = fecharFolha;   // sair sem guardar
+  el('sheetBox').scrollTop = 0;
+  el('modalSheet').style.display = 'flex';
+}
 function fecharFolha() { el('modalSheet').style.display = 'none'; }
 function campoNum(id, rotulo, valor, desativado) {
   return `<div class="sheet-campo"><label>${rotulo}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="0" autocomplete="off" value="${valor ?? ''}" ${desativado ? 'disabled' : ''} /></div>`;
@@ -681,7 +703,7 @@ async function enviar(url, corpo) {
 
 // ----- Levantar · vista ORDENS (logística): o levantamento faz-se à ordem, com as QVs -----
 let levOrdens = [];
-const FASE_ORD = { em_prova: ['em prova', 'aguardar'], misu: ['MISU', 'aguardar'], pronta: ['por levantar', 'fazer'], levantada: ['levantada', 'feito'] };
+const FASE_ORD = { em_prova: ['em prova', 'aguardar'], misu: ['MISU', 'aguardar'], pronta: ['por levantar', 'amarelo'], levantada: ['levantada', 'verde'] };
 function textoResultado(o) {
   if (o.fase !== 'levantada') return '';
   if (o.aguardaContadeira) return 'Levantada · a aguardar a contadeira';
@@ -694,17 +716,27 @@ function textoResultado(o) {
 function cartaoOrdemLev(o) {
   const [rot, cl] = FASE_ORD[o.fase] || [o.fase, 'aguardar'];
   const res = textoResultado(o);
-  return `<div class="cartao-lev${o.fase === 'pronta' ? ' pendente' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
+  return `<div class="cartao-lev${o.fase === 'pronta' ? ' o-falta' : o.fase === 'levantada' ? ' o-ok' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
     <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
-    <div class="meta">Mesas: ${o.mesas.join(', ')} · ${fmt(o.rolhas)} rolhas${o.continua ? ' · continua amanhã' : ''}<br/>Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${res ? '<br/><b>' + res + '</b>' : ''}</div>
+    <div class="meta">Mesas: ${o.mesas.join(', ')} · ${fmt(o.rolhas)} rolhas${o.continua ? ' · continua amanhã' : ''}<br/>Encomenda ${o.encomenda === null ? 'não indicada' : fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${res ? '<br/><b>' + res + '</b>' : ''}</div>
   </div>`;
 }
 async function renderOrdensLev() {
   await carregarLevantamento();
   const box = el('levOrdens');
+  if (!el('levBusca')) {
+    box.innerHTML = '<div class="campo" style="margin-bottom:10px;"><input type="search" id="levBusca" inputmode="numeric" placeholder="Procurar OP (ex: 15007565)" autocomplete="off" /></div><div id="levLista"></div>';
+    el('levBusca').oninput = () => { levBuscaTxt = el('levBusca').value.replace(/\D/g, ''); listarOrdensLev(); };
+  }
+  el('levBusca').value = levBuscaTxt;
+  listarOrdensLev();
+}
+let levBuscaTxt = '';
+function listarOrdensLev() {
+  const box = el('levLista');
   const peso = { pronta: 0, levantada: 2, misu: 4, em_prova: 5 };
-  const lista = levOrdens.slice().sort((a, b) => (peso[a.fase] - peso[b.fase]) || a.op.localeCompare(b.op));
-  box.innerHTML = lista.length ? lista.map(cartaoOrdemLev).join('') : '<div class="chips-vazio">Sem ordens colocadas hoje.</div>';
+  const lista = levOrdens.filter((o) => o.op.includes(levBuscaTxt)).sort((a, b) => (peso[a.fase] - peso[b.fase]) || a.op.localeCompare(b.op));
+  box.innerHTML = lista.length ? lista.map(cartaoOrdemLev).join('') : `<div class="chips-vazio">${levBuscaTxt ? 'Nenhuma OP encontrada.' : 'Sem ordens colocadas hoje.'}</div>`;
   box.querySelectorAll('.cartao-lev').forEach((c) => { c.onclick = () => folhaOrdem(c.dataset.op); });
 }
 function folhaOrdem(op) {
@@ -754,8 +786,8 @@ async function folhaOrdensSup(lista) {
   try { if (!lista) lista = (await enviar('/api/supervisora/ordens', { pin: pinSessao })).ordens; }
   catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
   const ord = lista.slice().sort((a, b) => (b.resultado === 'pendente') - (a.resultado === 'pendente') || a.op.localeCompare(b.op));
-  const blocos = ord.map((o) => `<div class="prop-linha ${o.resultado === 'pendente' ? 'pendente' : ''}">
-    <div><b>OP ${o.op}</b> · <b>${RES_TXT[o.resultado] || o.resultado}</b><br/>Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${o.falta ? ' · <b>faltam ' + fmt(o.falta) + '</b>' : ''}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''}</div>
+  const blocos = ord.map((o) => `<details class="prop-linha ${o.resultado === 'pendente' ? 'pendente' : ''}"${o.resultado === 'pendente' ? ' open' : ''}><summary>OP ${o.op} · ${RES_TXT[o.resultado] || o.resultado}</summary>
+    <div style="margin-top:6px;">Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${o.falta ? ' · <b>faltam ' + fmt(o.falta) + '</b>' : ''}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''}</div>
     <div class="prop-campos"><label>Rolhas<input type="number" inputmode="numeric" min="1" class="osN" data-op="${o.op}" placeholder="nº" /></label></div>
     <button class="secundario" data-a="acrescentar" data-op="${o.op}" style="margin-top:6px;">Acrescentar rolhas à encomenda</button>
     <button class="secundario" data-a="encomenda" data-op="${o.op}" style="margin-top:6px;">Alterar a quantidade encomendada</button>
@@ -764,7 +796,7 @@ async function folhaOrdensSup(lista) {
     ${o.faseHoje === 'levantada' ? `<button class="secundario" data-a="reabrir_levantamento" data-op="${o.op}" style="margin-top:6px;">Desfazer o levantamento de hoje</button>` : ''}
     ${o.contadaHoje ? `<button class="secundario" data-a="reabrir_contagem" data-op="${o.op}" style="margin-top:6px;">Reabrir a contagem da contadeira</button>` : ''}
     ${o.resultado === 'ok_com_falta' ? `<button class="secundario" data-a="reabrir" data-op="${o.op}" style="margin-top:6px;">Reabrir (deixar pendente)</button>` : ''}
-  </div>`).join('');
+  </details>`).join('');
   abrirFolha(`<h3>Ordens · encomenda e decisões</h3>${blocos || '<div class="aviso-hand">Ainda não há ordens.</div>'}
     <button class="secundario" id="osX">Fechar</button><div class="msg-erro" id="osErro"></div>`);
   el('osX').onclick = fecharFolha;
@@ -792,8 +824,8 @@ function folhaMisuOrdens(m) {
   const rpf = (g) => g.rolhasPorFrasco || 1;
   const blocos = segs.map((g, i) => `<div class="prop-linha">
     <div><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> · ${fmt(g.frascos)} frascos × ${rpf(g)} rolhas = ${fmt(g.rolhas)} rolhas · <b>${g.contadeira ? 'vai à contadeira' : 'não vai à contadeira'}</b>${g.frascosPartidos ? ` · partidos ${fmt(g.frascosPartidos)} frascos` : ''}</div>
-    ${g.contadeira ? '' : campoNum('misuLig' + i, 'Frascos de aroma ligeiro', g.ligeiros === null || g.ligeiros === undefined ? '' : g.ligeiros / rpf(g), bloq)}
-    ${campoNum('misuFor' + i, 'Frascos de aroma forte', g.fortes === null || g.fortes === undefined ? '' : g.fortes / rpf(g), bloq)}
+    <div class="grid2">${g.contadeira ? '' : campoNum('misuLig' + i, 'Frascos ligeiros', g.ligeiros === null || g.ligeiros === undefined ? '' : g.ligeiros / rpf(g), bloq)}
+    ${campoNum('misuFor' + i, 'Frascos fortes', g.fortes === null || g.fortes === undefined ? '' : g.fortes / rpf(g), bloq)}</div>
     <div class="soma-qv" id="misuApr${i}"></div>
     ${g.contadeira ? '<div class="dica">Com contadeira o MISU conta só os fortes; os ligeiros são da contadeira.</div>' : ''}
   </div>`).join('');
@@ -963,19 +995,20 @@ async function folhaEditar(codigo) {
   abrirFolha(`<h3>Editar mesa ${m.mesa}</h3>
     <div class="aviso-hand">Modo supervisora: as alterações ficam registadas já.</div>
     ${linhasRolhas(m)}
-    ${porOrdem ? htmlEditorOrdens(m) : `    <div class="sheet-campo"><label>Nº de ordem</label><input id="edOrdem" value="${m.ordem || ''}" inputmode="numeric" /></div>
+    ${porOrdem ? htmlEditorOrdens(m) : `<div class="grid2">    <div class="sheet-campo cheio"><label>Nº de ordem</label><input id="edOrdem" value="${m.ordem || ''}" inputmode="numeric" /></div>
     ${optSel('edTipo', 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], m.tipo)}
     ${optSel('edRolhas', 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], m.rolhasPorFrasco)}
     ${campoNum('edTotal', 'Total de frascos/cliente', m.totalFrascos)}
     ${optSel('edCont', 'Contadeira', sn, m.contadeira ? 1 : 0)}
     ${optSel('edDsrol', 'DSROL', sn, m.dsrol ? 1 : 0)}
     ${campoNum('edPartidos', 'Frascos partidos', m.frascosPartidos)}
-    ${campoNum('edQvCol', 'QVs da colocação (nº de rolhas)', m.qvs.colocacao)}`}
-    ${porOrdem ? (m.segmentos || []).map((g, i) => `<div class="prop-linha"><b>OP ${g.op}</b> · ${g.contadeira ? 'contadeira' : 'sem contadeira'}${g.contadeira ? '' : campoNum('edLigO' + i, 'MISU · aromas ligeiros', g.ligeiros)}${campoNum('edForO' + i, 'MISU · aromas fortes', g.fortes)}</div>`).join('') : `${m.contadeira ? '' : campoNum('edLig', 'MISU · aromas ligeiros', m.ligeiros)}
+    ${campoNum('edQvCol', 'QVs colocação (rolhas)', m.qvs.colocacao)}</div>`}
+    ${porOrdem ? (m.segmentos || []).map((g, i) => `<details class="prop-linha" open><summary>MISU · ${rotuloOrdem(m, g, i)} · OP ${g.op} · ${g.contadeira ? 'contadeira' : 'sem contadeira'}</summary><div class="grid2">${g.contadeira ? '' : campoNum('edLigO' + i, 'Ligeiros (rolhas)', g.ligeiros)}${campoNum('edForO' + i, 'Fortes (rolhas)', g.fortes)}</div></details>`).join('') : `${m.contadeira ? '' : campoNum('edLig', 'MISU · aromas ligeiros', m.ligeiros)}
     ${campoNum('edFor', 'MISU · aromas fortes', m.fortes)}`}
-    ${campoNum('edQvMisu', 'MISU · QVs (nº de rolhas)', m.qvs.misu)}
-    ${campoNum('edQvLog', 'Logística · QVs (nº de rolhas)', m.qvs.logistica)}
-    ${contOp}
+    <div class="grid2">
+    ${campoNum('edQvMisu', 'MISU · QVs (rolhas)', m.qvs.misu)}
+    ${campoNum('edQvLog', 'Logística · QVs (rolhas)', m.qvs.logistica)}
+    ${contOp}</div>
     <button class="primario" id="edGuardar" style="margin-top:10px;">Guardar alterações</button>
     <button class="secundario" id="edTirar">Tirar esta mesa de hoje</button>
     <button class="secundario" id="edX">Fechar</button>
@@ -1002,18 +1035,20 @@ async function folhaEditar(codigo) {
 // ----- Editor de ordens (colocação) de uma mesa: hoje ou amanhã -----
 function htmlEditorOrdens(m) {
   const sn = [[1, 'Sim'], [0, 'Não']];
-  return (m.segmentos || []).map((g, i) => `<div class="prop-linha"><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> (frascos ${g.de}–${g.ate})
-    <div class="sheet-campo"><label>Nº de ordem</label><input id="eoOp${i}" value="${esc(g.op)}" inputmode="numeric" autocomplete="off" /></div>
+  const segs = m.segmentos || [];
+  return segs.map((g, i) => `<details class="prop-linha"${segs.length === 1 ? ' open' : ''}><summary>${rotuloOrdem(m, g, i)} · OP ${g.op} <small style="font-weight:600;color:#555;">(frascos ${g.de}–${g.ate})</small></summary>
+    <div class="grid2">
+    <div class="sheet-campo cheio"><label>Nº de ordem</label><input id="eoOp${i}" value="${esc(g.op)}" inputmode="numeric" autocomplete="off" /></div>
     ${campoNum('eoFr' + i, 'Frascos da ordem', g.frascos)}
     ${optSel('eoRol' + i, 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], g.rolhasPorFrasco)}
     ${campoNum('eoPart' + i, 'Frascos partidos', g.frascosPartidos)}
-    ${campoNum('eoQv' + i, 'QVs da colocação (nº de rolhas)', g.qvs)}
+    ${campoNum('eoQv' + i, 'QVs colocação (rolhas)', g.qvs)}
     ${optSel('eoTipo' + i, 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
     ${optSel('eoCont' + i, 'Contadeira', sn, g.contadeira ? 1 : 0)}
     ${optSel('eoDsrol' + i, 'DSROL', sn, g.dsrol ? 1 : 0)}
-    ${campoNum('eoEnc' + i, 'Quantidade encomendada (rolhas)', g.encomenda)}
+    ${campoNum('eoEnc' + i, 'Encomenda (rolhas)', g.encomenda)}
     ${optSel('eoCm' + i, 'Continua amanhã', sn, g.continua ? 1 : 0)}
-    <button class="secundario" id="eoSave${i}">Guardar esta ordem</button></div>`).join('');
+    <button class="secundario" id="eoSave${i}">Guardar esta ordem</button></div></details>`).join('');
 }
 function ligarEditorOrdens(m, data, recarregar) {
   (m.segmentos || []).forEach((g, i) => {
@@ -1086,11 +1121,13 @@ async function folhaProvasMesa(codigo) {
       <button class="secundario" id="rgNOk">Guardar nº de provadores</button></div>` : ''}
     ${regs.length ? regs.map((r) => {
       const lst = nomes.includes(r.aprovador) ? nomes : [r.aprovador, ...nomes];
-      return `<div class="prop-linha"><b>${esc(r.aprovador)}</b> · ${r.estado}
+      return `<details class="prop-linha"${regs.length <= 2 ? ' open' : ''}><summary>${esc(r.aprovador)} · ${r.estado} · ${r.abertura || ''}${r.fecho ? '–' + r.fecho : ''}</summary>
+        <div class="grid2">
         ${optSel('rgAp' + r.id, 'Provador', lst.map((n) => [n, n]), r.aprovador)}
-        <div class="prop-campos"><label>Abertura<input type="time" id="rgA${r.id}" value="${r.abertura || ''}" /></label><label>Fecho<input type="time" id="rgF${r.id}" value="${r.fecho || ''}" /></label></div>
         ${optSel('rgEs' + r.id, 'Estado', [['Aberto', 'Aberto'], ['Fechado', 'Fechado']], r.estado)}
-        <div class="prop-campos"><button class="secundario" data-g="${r.id}">Guardar</button><button class="secundario" data-d="${r.id}">Apagar prova</button></div></div>`;
+        <div class="sheet-campo"><label>Abertura</label><input type="time" id="rgA${r.id}" value="${r.abertura || ''}" /></div>
+        <div class="sheet-campo"><label>Fecho</label><input type="time" id="rgF${r.id}" value="${r.fecho || ''}" /></div>
+        <button class="secundario" data-g="${r.id}">Guardar</button><button class="secundario" data-d="${r.id}">Apagar prova</button></div></details>`;
     }).join('') : '<div class="aviso-hand">Ainda não há provas registadas nesta mesa hoje.</div>'}
     <button class="secundario" id="rgX">Fechar</button>
     <div class="msg-erro" id="rgErro"></div>`);
@@ -1134,3 +1171,10 @@ el('tileContadeira').onclick = () => { mostrarTela('telaContadeira'); abrirPerfi
 
 // arranque: ecrã Home
 mostrarTela('telaHome');
+
+// segurança: ao sair da app (mudar de aplicação, ecrã bloqueado) a sessão da supervisora termina
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  if (['editar', 'editarMesas', 'editarProvas'].includes(logModo) && el('telaLogistica').classList.contains('ativa')) definirModo('colocar');
+  else pinSessao = null;
+});

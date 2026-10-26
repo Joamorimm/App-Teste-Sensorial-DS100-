@@ -159,3 +159,10 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - Fluxo: MISU → levantamento (logística) → contadeira (rolhas OK + ligeiras, tem de bater com a colocação).
 - Supervisora: Ordens · encomenda e decisões → reabrir MISU / levantamento / contagem.
 - v58: a supervisora pode alterar o nº de provadores de uma mesa (Editar · supervisora → Provas de uma mesa).
+- v59: pesquisa de OP nas vistas Ordens · logística e Contadeira.
+- v60: menu da supervisora simplificado; só ficou o CSV de movimentos; Restaurar versão anterior (cópias automáticas dos dados).
+- v61: Ordens · logística: por levantar a amarelo, levantada a verde.
+- v62: a sessão da supervisora termina também ao mudar de aplicação / bloquear o ecrã.
+- v63: blocos das ordens com contorno verde nítido.
+- v64: botão Fechar fixo no topo de todas as folhas (sair sem guardar).
+- v65: folhas compactas (2 colunas, ordens recolhíveis); contadores dos provadores e provas do dia passam a seguir o dia de Lisboa (zeram à meia-noite).

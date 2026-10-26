@@ -59,7 +59,7 @@ main{flex:1;padding:18px 20px 28px;overflow-y:auto;-webkit-overflow-scrolling:to
 .campo input{flex:1;width:100%;padding:16px 14px;font-size:19px;font-weight:700;letter-spacing:1px;border:2px solid #e4e7e2;background:#fff;border-radius:14px;text-transform:uppercase;}
 .campo input:focus{outline:none;border-color:var(--verde);}
 
-button.primario{width:100%;padding:17px;font-size:16px;font-weight:800;background:var(--accent);color:#fff;border:none;border-radius:16px;cursor:pointer;box-shadow:0 8px 18px rgba(255,122,77,.35);transition:transform .08s,opacity .15s;}
+button.hub-btn{width:100%;display:block;text-align:left;padding:16px 18px;margin-top:8px;font-size:16px;font-weight:600;color:#1f3d1a;background:#f3f6f1;border:1px solid #d5ddd0;border-radius:14px;cursor:pointer;}button.hub-btn:active{background:#e4ebdf;}button.primario{width:100%;padding:17px;font-size:16px;font-weight:800;background:var(--accent);color:#fff;border:none;border-radius:16px;cursor:pointer;box-shadow:0 8px 18px rgba(255,122,77,.35);transition:transform .08s,opacity .15s;}
 button.primario:active{transform:scale(.97);}
 button.primario:disabled{background:#c6cbc7;box-shadow:none;}
 button.secundario{width:100%;padding:15px;font-size:14.5px;font-weight:700;background:#fff;color:var(--verde-escuro2);border:2px solid #e4e7e2;border-radius:16px;margin-top:10px;cursor:pointer;transition:transform .08s;}
@@ -154,6 +154,10 @@ main{margin-top:0;padding-top:16px;}
 .cartao-lev{background:#fff;border-radius:16px;padding:13px 14px;box-shadow:0 2px 10px rgba(20,40,20,.06);cursor:pointer;border:2px solid transparent;}
 .cartao-lev.desativada{opacity:.55;cursor:default;}
 .cartao-lev.pendente{border-color:#cfe6c5;}
+.cartao-lev.o-falta{border-color:#f0c64a;background:#fffbea;}
+.cartao-lev.o-ok{border-color:#9fd08a;background:#f1f9ee;}
+.cartao-lev .estado.amarelo{background:#fde68a;color:#7a5200;}
+.cartao-lev .estado.verde{background:#bfe5b0;color:#1d5a0f;}
 .cartao-lev .topo{display:flex;align-items:center;gap:8px;font-weight:800;font-size:17px;}
 .cartao-lev .estado{margin-left:auto;font-size:11.5px;font-weight:800;padding:4px 9px;border-radius:9px;}
 .estado.aguardar{background:#eceeed;color:#6b756f;}.estado.fazer{background:#dff3d8;color:#1b6b1a;}.estado.feito{background:#e9ecea;color:#56605a;}
@@ -181,7 +185,19 @@ main{margin-top:0;padding-top:16px;}
 .op-aviso{color:var(--bloq-tx);font-size:12px;font-weight:700;margin-top:6px;}
 .aviso-geral{background:var(--bloq-bg);color:var(--bloq-tx);font-weight:700;font-size:13px;border-radius:12px;padding:10px 12px;margin-bottom:10px;}
 .msg-ok{background:var(--ok-bg);color:var(--ok-tx);font-weight:700;font-size:13.5px;border-radius:12px;padding:12px;margin-top:12px;}
-.prop-linha{border:1px solid #e3e7e2;border-radius:12px;padding:10px;margin:8px 0;background:#fafcf9;font-size:14px;}
+.sheet-topo{position:sticky;top:-1px;z-index:5;display:flex;justify-content:flex-end;background:#fff;padding:6px 0 8px;margin-bottom:4px;}
+.sheet-topo button{width:auto;padding:10px 18px;font-size:15px;font-weight:700;color:#1f3d1a;background:#eef3ea;border:1px solid #cfd9c8;border-radius:12px;cursor:pointer;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-top:8px;}
+.grid2 .sheet-campo{margin-bottom:6px;}.grid2 .sheet-campo input{padding:10px;font-size:16px;border-radius:11px;}
+.grid2 .sheet-campo select,.sheet-campo select{width:100%;box-sizing:border-box;padding:10px;font-size:16px;font-weight:600;border:2px solid #e4e7e2;border-radius:11px;background:#fff;font-family:inherit;}
+.grid2 .cheio,.grid2>button{grid-column:1/-1;}
+details.prop-linha>summary{cursor:pointer;font-weight:800;list-style:none;font-size:15px;color:#2d6a1a;padding:2px 0;}
+details.prop-linha>summary::-webkit-details-marker{display:none;}
+details.prop-linha>summary::after{content:'▾';float:right;color:#46962b;}
+details.prop-linha[open]>summary::after{content:'▴';}
+.prop-linha{border:2px solid #46962b;border-left:10px solid #46962b;border-radius:12px;padding:12px;margin:16px 0;background:#f2f9ee;font-size:14px;}
+.prop-linha>b:first-child,.prop-linha>div>b:first-child{color:#2d6a1a;font-size:15px;}
+.prop-linha.pendente{border-color:#e0a800;background:#fffbea;}
 .prop-campos{display:flex;gap:8px;margin-top:6px;}
 .prop-campos label{flex:1;font-size:12px;color:var(--texto-suave);display:flex;flex-direction:column;gap:3px;}
 .prop-campos input{padding:8px;border:1px solid #cfd6cd;border-radius:8px;font-size:15px;width:100%;box-sizing:border-box;}
@@ -245,18 +261,14 @@ main{margin-top:0;padding-top:16px;}
       </div>
 
       <div id="editHub" class="card" style="display:none;margin-bottom:12px;">
-        <p class="intro" style="margin-top:0;">Menu da supervisora · o que queres editar?</p>
-        <button class="primario" id="hubProvadores" style="margin-top:6px;">Provadores · lista de nomes</button>
-        <button class="primario" id="hubProvas" style="margin-top:8px;">Provas de uma mesa · editar ou apagar</button>
-        <button class="primario" id="hubMesas" style="margin-top:8px;">Colocação e levantamento · editar campos</button>
-        <button class="primario" id="hubOrdens" style="margin-top:8px;">Ordens · encomenda e decisões</button>
-        <button class="primario" id="hubDias" style="margin-top:8px;">Dias de trabalho · incluir sábado</button>
-        <p class="intro" style="margin-top:16px;">Ferramentas</p>
-        <button class="secundario" id="btnColocarHoje" style="margin-top:0;">Colocar mesas de HOJE (teste)</button>
-        <button class="secundario" id="btnSeed">Carregar ordens de teste (colocação de 23/10)</button>
-        <button class="secundario" id="btnSeedProvas">Carregar ordens de teste com provas já feitas</button>
-        <button class="secundario" id="btnHistorico">Descarregar histórico de movimentos (CSV)</button>
-        <button class="secundario" id="btnReset">Limpar todos os dados de teste</button>
+        <p class="intro" style="margin-top:0;">Menu da supervisora</p>
+        <button class="hub-btn" id="hubProvadores">Provadores · lista de nomes</button>
+        <button class="hub-btn" id="hubProvas">Provas de uma mesa · editar ou apagar</button>
+        <button class="hub-btn" id="hubMesas">Colocação e levantamento · editar campos</button>
+        <button class="hub-btn" id="hubOrdens">Ordens · encomenda e decisões</button>
+        <button class="hub-btn" id="hubDias">Dias de trabalho · incluir sábado</button>
+        <button class="hub-btn" id="hubVersoes">Restaurar versão anterior</button>
+        <button class="hub-btn" id="btnHistorico">Descarregar movimentos (CSV)</button>
       </div>
       <div id="editVoltar" class="card" style="display:none;margin-bottom:12px;">
         <button class="secundario" id="btnHub" style="margin-top:0;">← Menu de edições</button>

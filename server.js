@@ -23,6 +23,7 @@ const ACOES = [
   [/^\/api\/contadeira\/op\/([^/]+)$/, 'contadeira'],
   [/^\/api\/supervisora\/mesa\/([^/]+)$/, 'edicao_supervisora'],
   [/^\/api\/supervisora\/reset$/, 'limpeza_dados_teste'],
+  [/^\/api\/supervisora\/versoes\/restaurar$/, 'restauro_versao'],
   [/^\/api\/supervisora\/dias-extra$/, 'edicao_dias_uteis'],
   [/^\/api\/supervisora\/seed-teste$/, 'carregar_ordens_teste'],
   [/^\/api\/supervisora\/provadores$/, 'edicao_provadores'],
@@ -34,10 +35,28 @@ const ACOES = [
   [/^\/api\/planeamento\/confirmar$/, 'planeamento_confirmado'],
 ];
 const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
-app.use((req, res, next) => {
+// --- Versões: cópia dos dados antes de alterações importantes (e, no máximo, de 15 em 15 min nas restantes) ---
+const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia'];
+const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão' };
+const FORTES = new Set(['limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
+async function guardarVersao(motivo, cli) {
+  const q = cli || pool;
+  const dados = {};
+  for (const t of TAB_VERSAO) dados[t] = (await q.query(`SELECT COALESCE(json_agg(t), '[]'::json) AS j FROM ${t} t`)).rows[0].j;
+  const resumo = `${dados.ordens.length} ordens · ${dados.lotes.length} mesas · ${dados.registos.length} provas`;
+  await q.query(`INSERT INTO versoes (motivo, resumo, dados) VALUES ($1,$2,$3)`, [motivo, resumo, JSON.stringify(dados)]);
+  await q.query(`DELETE FROM versoes WHERE id NOT IN (SELECT id FROM versoes ORDER BY id DESC LIMIT 60)`);
+}
+app.use(async (req, res, next) => {
   if (req.method !== 'POST' || !req.path.startsWith('/api/')) return next();
   const alvo = ACOES.find(([re]) => re.test(req.path));
   if (!alvo) return next();
+  if (alvo[1] !== 'prova_aberta' && alvo[1] !== 'prova_concluida') {
+    try {
+      const rec = (await pool.query(`SELECT 1 FROM versoes WHERE criado > now() - interval '15 minutes' LIMIT 1`)).rowCount > 0;
+      if (FORTES.has(alvo[1]) || !rec) await guardarVersao('antes de: ' + (MOTIVOS[alvo[1]] || alvo[1]));
+    } catch (e) { console.error('Falha a guardar versão:', e.message); }
+  }
   let resposta = null;
   const j = res.json.bind(res);
   res.json = (o) => { resposta = o; return j(o); };
@@ -75,7 +94,7 @@ app.get('/api/aprovador/:nome/mesas-hoje', async (req, res) => {
     const r = await pool.query(
       `SELECT COUNT(DISTINCT mesa)::int AS n FROM registos
        WHERE aprovador = $1 AND estado = 'Fechado'
-         AND hora_fecho >= CURRENT_DATE AND hora_fecho < CURRENT_DATE + 1`,
+         AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`,
       [nome]
     );
     res.json({ mesas: r.rows[0].n });
@@ -260,7 +279,7 @@ app.get('/api/logistica/mesas', async (req, res) => {
     const lado = data === plan.hojeLisboa() ? await ladoHoje() : plan.ladoDoDia(data);
     const feitos = await pool.query(
       `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
-       WHERE estado = 'Fechado' AND hora_fecho >= CURRENT_DATE AND hora_fecho < CURRENT_DATE + 1
+       WHERE estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
        GROUP BY mesa`);
     const abertos = await pool.query(`SELECT mesa FROM registos WHERE estado = 'Aberto'`);
     const nFeitos = new Map(feitos.rows.map((r) => [r.mesa, r.n]));
@@ -328,7 +347,7 @@ app.post('/api/logistica/levantar', async (req, res) => {
     if (!desfazer) {
       const f = await pool.query(
         `SELECT COUNT(DISTINCT aprovador)::int AS n FROM registos
-         WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= CURRENT_DATE AND hora_fecho < CURRENT_DATE + 1`, [mesa]);
+         WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`, [mesa]);
       const l = await pool.query(
         `SELECT * FROM lotes WHERE mesa = $1 AND data_planeamento = $2 AND ativo = true`, [mesa, data]);
       if (!l.rowCount) return res.status(409).json({ erro: 'Mesa sem lote hoje.' });
@@ -545,7 +564,7 @@ app.post('/api/logistica/ordem/remover', async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ erro: 'Esta ordem não está colocada neste dia.' });
     const mesas = r.rows.map((x) => x.mesa);
     if (ctx.data === ctx.hoje) {
-      const pr = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= CURRENT_DATE LIMIT 1`, [mesas]);
+      const pr = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') LIMIT 1`, [mesas]);
       if (pr.rowCount) return res.status(409).json({ erro: 'Já há provas registadas nestas mesas hoje.' });
     }
     const client = await pool.connect();
@@ -572,7 +591,7 @@ app.post('/api/logistica/remover', async (req, res) => {
     if (data < hoje) return res.status(400).json({ erro: 'Não é possível alterar uma data passada.' });
     if (data === hoje && !supervisora) return res.status(401).json({ erro: 'Alterar as mesas de hoje só com a palavra-passe da supervisora.' });
     if (data === hoje) {
-      const r = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= CURRENT_DATE LIMIT 1`, [mesas.map((m) => String(m).toUpperCase())]);
+      const r = await pool.query(`SELECT 1 FROM registos WHERE mesa = ANY($1) AND hora_abertura >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') LIMIT 1`, [mesas.map((m) => String(m).toUpperCase())]);
       if (r.rowCount) return res.status(409).json({ erro: 'Já há provas registadas nestas mesas hoje.' });
     }
     await pool.query(`DELETE FROM lote_ops WHERE data = $1 AND mesa = ANY($2)`, [data, mesas.map((m) => String(m).toUpperCase())]);
@@ -608,7 +627,7 @@ async function lotesDeHoje() {
   lotes.rows.forEach((l) => { l._segs = segsPorMesa.get(l.mesa) || []; });
   const feitos = await pool.query(
     `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
-     WHERE estado = 'Fechado' AND hora_fecho >= CURRENT_DATE AND hora_fecho < CURRENT_DATE + 1 GROUP BY mesa`);
+     WHERE estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon') GROUP BY mesa`);
   const abertos = await pool.query(`SELECT mesa FROM registos WHERE estado = 'Aberto'`);
   const nFeitos = new Map(feitos.rows.map((r) => [r.mesa, r.n]));
   const emAnalise = new Set(abertos.rows.map((r) => r.mesa));
@@ -803,6 +822,29 @@ async function listaOrdensSupervisora() {
     return { op: o.op, encomenda: o.encomenda, acumulado, falta: o.encomenda === null ? 0 : Math.max(0, o.encomenda - acumulado), rolhasAdicionais: o.rolhas_adicionais, aceiteFalta: o.aceite_falta, resultado, dias: dd.map((d) => d.d), faseHoje: ho ? ho.fase : null, contadaHoje: ho ? ho.aprovadasDia !== null && ho.contadeira : false, contadeira: ho ? ho.contadeira : false };
   });
 }
+app.post('/api/supervisora/versoes', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const r = await pool.query(`SELECT id, motivo, resumo, to_char(criado AT TIME ZONE 'Europe/Lisbon', 'DD/MM HH24:MI') AS quando FROM versoes ORDER BY id DESC LIMIT 40`);
+    res.json({ ok: true, versoes: r.rows });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter as versões.' }); }
+});
+app.post('/api/supervisora/versoes/restaurar', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const v = (await pool.query(`SELECT dados FROM versoes WHERE id = $1`, [Number((req.body || {}).id)])).rows[0];
+    if (!v) return res.status(404).json({ erro: 'Versão não encontrada.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const t of TAB_VERSAO) await client.query(`DELETE FROM ${t}`);
+      for (const t of TAB_VERSAO) await client.query(`INSERT INTO ${t} SELECT * FROM json_populate_recordset(null::${t}, $1::json)`, [JSON.stringify(v.dados[t] || [])]);
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    await carregarDiasExtra();
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao restaurar a versão.' }); }
+});
 app.post('/api/supervisora/ordens', async (req, res) => {
   try {
     if (!verificarPin(req, res)) return;
@@ -1035,7 +1077,7 @@ app.post('/api/supervisora/registos', async (req, res) => {
     const r = await pool.query(
       `SELECT id, aprovador, hora_abertura, hora_fecho, estado,
               to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura, to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho
-       FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE - 1 ORDER BY id`, [mesa]);
+       FROM registos WHERE mesa = $1 AND hora_abertura >= (((now() AT TIME ZONE 'Europe/Lisbon')::date - 1)::timestamp AT TIME ZONE 'Europe/Lisbon') ORDER BY id`, [mesa]);
     const hoje = plan.hojeLisboa();
     const lt = (await pool.query(`SELECT numero_provadores FROM lotes WHERE mesa = $1 AND data_planeamento = $2 AND ativo = true`, [mesa, hoje])).rows[0];
     res.json({ mesa, provadores: lt ? lt.numero_provadores : null, feitos: r.rows.filter((x) => x.estado === 'Fechado').length, registos: r.rows.filter((x) => new Date(x.hora_abertura).toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' }) === hoje) });
@@ -1187,11 +1229,11 @@ async function semearOrdensTeste({ provas, data: dataFixa } = {}) {
         .sort((a, b) => Number(a.mesa.slice(1)) - Number(b.mesa.slice(1)));
       const n = lotes.length;   // todas as mesas ficam com as provas feitas (prontas para o MISU)
       for (const l of lotes.slice(0, n)) {
-        const ja = await client.query(`SELECT 1 FROM registos WHERE mesa = $1 AND hora_abertura >= CURRENT_DATE LIMIT 1`, [l.mesa]);
+        const ja = await client.query(`SELECT 1 FROM registos WHERE mesa = $1 AND hora_abertura >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') LIMIT 1`, [l.mesa]);
         if (ja.rowCount) continue;
         for (let k = 0; k < l.numero_provadores && k < nomes.length; k++) {
           await client.query(
-            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - ($3 || ' minutes')::interval, CURRENT_DATE + interval '1 minute'), GREATEST(now() - ($4 || ' minutes')::interval, CURRENT_DATE + interval '2 minutes'), 'Fechado', NULL)`,
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - ($3 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '1 minute'), GREATEST(now() - ($4 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '2 minutes'), 'Fechado', NULL)`,
             [l.mesa, nomes[(Number(l.mesa.slice(1)) + k) % nomes.length], String(200 - k * 40), String(190 - k * 40)]);
         }
       }

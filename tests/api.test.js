@@ -13,6 +13,33 @@ test('saúde e lista de aprovadores (9 seed)', async () => {
   assert.ok(r.body.some((a) => a.nome === 'Tânia Gonçalves'));
 });
 
+test('supervisora altera o nº de provadores de uma mesa (2 → 3)', async () => {
+  const hoje = plan.hojeLisboa();
+  const Lh = await require('../logic').ladoHoje();
+  await api('POST', '/api/logistica/ordem/confirmar', { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 100000, rolhasPorFrasco: 2, ordem: '15102600', frascos: 10, contadeira: false });
+  const m = `${Lh}1`;
+  assert.strictEqual((await api('POST', '/api/supervisora/registos', { pin: '8126', mesa: m })).body.provadores, 2);
+  assert.strictEqual((await api('POST', `/api/supervisora/mesa/${m}`, { provadores: 3 })).status, 401);
+  assert.strictEqual((await api('POST', `/api/supervisora/mesa/${m}`, { pin: '8126', provadores: 9 })).status, 400);
+  assert.strictEqual((await api('POST', `/api/supervisora/mesa/${m}`, { pin: '8126', provadores: 3 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/supervisora/registos', { pin: '8126', mesa: m })).body.provadores, 3);
+});
+
+test('versões: restaurar o estado anterior com a palavra-passe da supervisora', async () => {
+  const hoje = plan.hojeLisboa();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 500, rolhasPorFrasco: 2, contadeira: false };
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102700', frascos: 10 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/supervisora/reset', { pin: '8126', confirmar: 'APAGAR' })).status, 200);
+  assert.strictEqual((await api('GET', '/api/levantamento')).body.ordens.length, 0);
+  const v = (await api('POST', '/api/supervisora/versoes', { pin: '8126' })).body.versoes;
+  const antes = v.find((x) => /limpeza/.test(x.motivo));
+  assert.ok(antes);
+  assert.strictEqual((await api('POST', '/api/supervisora/versoes/restaurar', { pin: '8126', id: antes.id })).status, 200);
+  const o = (await api('GET', '/api/levantamento')).body.ordens;
+  assert.deepStrictEqual(o.map((x) => x.op), ['15102700']);
+  assert.strictEqual((await api('POST', '/api/supervisora/versoes/restaurar', { pin: '8126', id: 999999 })).status, 404);
+});
+
 test('mesa sem lote hoje abre de imediato (não planeada)', async () => {
   const e = (await api('GET', '/api/mesa/Z99?aprovador=Marta Santos')).body;
   assert.strictEqual(e.planeado, false);

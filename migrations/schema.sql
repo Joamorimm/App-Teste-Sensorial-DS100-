@@ -158,3 +158,12 @@ CREATE TABLE IF NOT EXISTS ordens_dia (
   PRIMARY KEY (data, op)
 );
 ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS misu_qvs INTEGER;
+
+-- Versões (cópias de segurança dos dados) para a supervisora restaurar
+CREATE TABLE IF NOT EXISTS versoes (
+  id SERIAL PRIMARY KEY,
+  criado TIMESTAMPTZ NOT NULL DEFAULT now(),
+  motivo TEXT,
+  resumo TEXT,
+  dados JSONB NOT NULL
+);
