@@ -806,16 +806,16 @@ test('contadeira POR ORDEM: numa mesa partilhada, uma ordem vai à contadeira e 
   // novo fluxo: levanta-se primeiro (logística, com QVs) e só depois a contadeira conta
   const LV = (op, extra = {}) => api('POST', '/api/logistica/ordem/levantar', { op, ...extra });
   assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0 })).status, 409);   // ainda não levantada
-  assert.strictEqual((await LV('15007565')).status, 400);                                                  // faltam as QVs
-  assert.strictEqual((await LV('15007565', { qvs: 7 })).status, 200);
+  assert.strictEqual((await LV('15007565')).status, 200);                                                  // com contadeira as QVs são apontadas na contadeira
   assert.strictEqual((await api('POST', '/api/logistica/levantar', { mesa: `${Lh}1` })).status, 409);       // a mesa não se levanta: é pela ordem
   assert.strictEqual((await api('POST', '/api/logistica/ordem/qvs', { op: '15007565', qvs: 9 })).status, 409);   // levantada: bloqueada
   let od = (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === '15007565');
   assert.deepStrictEqual([od.fase, od.aguardaContadeira, od.resultado], ['levantada', true, 'em_curso']);
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196 })).status, 400);   // faltam as ligeiras
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2 })).status, 400);   // 190+2+4 != 200
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2 })).status, 200);
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0 })).status, 409);   // já registada
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, qvs: 7 })).status, 400);   // faltam as ligeiras
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2, qvs: 7 })).status, 400);   // 190+2+4 != 200
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2 })).status, 400);   // faltam as QVs
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2, qvs: 7 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0, qvs: 1 })).status, 409);   // já registada
   assert.strictEqual((await LV('15102480', { qvs: 0 })).status, 200);
   assert.strictEqual((await lev(`${Lh}1`)).estadoProva, 'levantada');                                       // todas as ordens levantadas: mesa levantada
   od = (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === '15007565');

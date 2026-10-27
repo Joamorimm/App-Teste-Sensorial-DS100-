@@ -177,3 +177,4 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v74: rolhas partidas reais (nº real) na colocação e na edição; ecrãs dos provadores mostram frascos · rolhas partidas.
 - v75: rótulo 'Quantidade total de frascos (a distribuir pelas mesas)'.
 - v76: rótulo 'Quantidade total de frascos / mesas'.
+- v77: ordens com contadeira: a logística só levanta; as QVs apontam-se na contadeira (junto das rolhas OK e ligeiras). Sem contadeira: igual.

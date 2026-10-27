@@ -776,10 +776,11 @@ function folhaOrdem(op) {
     ${bloqAprov ? `<div class="bloco-rolhas">Aprovadas hoje: <b>${fmt(apr)}</b> (total − ligeiras − fortes − partidas)<br/>
       Encomenda <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''} · hoje ${fmt(apr)} = <b>${fmt(o.acumulado)}</b><br/>
       ${o.continua ? '<b>1.º fecho</b> · a ordem continua amanhã' : (o.acumulado >= o.encomenda ? '<b>OK</b> · encomenda cumprida' : `<b>Faltam ${fmt(o.falta)} rolhas</b> · fica pendente para a supervisão`)}</div>` : ''}
-    ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro e a contadeira conta depois.</div>' : ''}
+    ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro; a contadeira conta depois e é lá que se apontam as QVs.</div>' : ''}
     ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>Levantamento registado: só a supervisora pode alterar.</div>` : ''}
-    ${o.fase === 'pronta' ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
+    ${o.fase === 'pronta' && !o.contadeira ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
       <button class="primario" id="ordLev" style="margin-top:10px;">Guardar QVs e levantar ordem</button>` : ''}
+    ${o.fase === 'pronta' && o.contadeira ? '<button class="primario" id="ordLev" style="margin-top:10px;">Levantar ordem</button>' : ''}
     <button class="secundario" id="ordX">Fechar</button>
     <div class="msg-erro" id="ordErro"></div>`);
   const somar = () => {
@@ -791,9 +792,9 @@ function folhaOrdem(op) {
   el('ordX').onclick = fecharFolha;
   if (el('ordLev')) el('ordLev').onclick = async () => {
     el('ordErro').textContent = '';
-    if (lerNum('ordQvs') === undefined) { el('ordErro').textContent = 'Indica as QVs (escreve 0 se não houver).'; return; }
+    if (el('ordQvs') && lerNum('ordQvs') === undefined) { el('ordErro').textContent = 'Indica as QVs (escreve 0 se não houver).'; return; }
     try {
-      await enviar('/api/logistica/ordem/levantar', { op: o.op, qvs: lerNum('ordQvs') });
+      await enviar('/api/logistica/ordem/levantar', { op: o.op, ...(el('ordQvs') ? { qvs: lerNum('ordQvs') } : {}) });
       fecharFolha(); await renderOrdensLev(); carregarLogistica();
     } catch (e) { el('ordErro').textContent = e.message; }
   };
@@ -932,6 +933,7 @@ function folhaContadeira(o) {
     ${feito ? '<div class="aviso-hand">Contagem registada. Só a supervisora pode alterar.</div>' : '<p class="intro" style="margin-top:0;">Valores contados pela máquina para a OP (nº de rolhas)</p>'}
     ${campoNum('contApr', 'Rolhas OK (aprovadas)', o.aprovadas, feito)}
     ${campoNum('contLig', 'Rolhas ligeiras', o.ligeirasContadas, feito)}
+    ${campoNum('contQvs', 'QVs · qualidade visual (nº de rolhas)', feito ? o.qvsLog : '', feito)}
     ${feito ? '' : '<button class="primario" id="contOk">Guardar</button>'}
     <button class="secundario" id="contX">Fechar</button>
     <div class="msg-erro" id="contErro"></div>`);
@@ -939,9 +941,9 @@ function folhaContadeira(o) {
   if (feito) return;
   el('contOk').onclick = async () => {
     el('contErro').textContent = '';
-    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined) { el('contErro').textContent = 'Indica as rolhas OK e as rolhas ligeiras (0 se não houver).'; return; }
+    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined || lerNum('contQvs') === undefined) { el('contErro').textContent = 'Indica as rolhas OK, as ligeiras e as QVs (0 se não houver).'; return; }
     try {
-      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig') });
+      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig'), qvs: lerNum('contQvs') });
       fecharFolha(); abrirPerfil();
     } catch (e) { el('contErro').textContent = e.message; }
   };
