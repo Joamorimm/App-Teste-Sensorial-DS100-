@@ -173,3 +173,7 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v70: tocar em 'N mesas feitas hoje' mostra a lista de mesas (com hora de fecho).
 - v71: Menu Supervisão → Provadores · provas, mesas e métricas (hoje/7/30 dias, CSV).
 - v72: Menu Supervisão → Fechar provas em lote (intervalo de mesas, exceções, nº de provadores).
+- v73: 'Tirar esta ordem' só na supervisão (exige palavra-passe).
+- v74: rolhas partidas reais (nº real) na colocação e na edição; ecrãs dos provadores mostram frascos · rolhas partidas.
+- v75: rótulo 'Quantidade total de frascos (a distribuir pelas mesas)'.
+- v76: rótulo 'Quantidade total de frascos / mesas'.

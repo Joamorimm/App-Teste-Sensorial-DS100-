@@ -161,7 +161,7 @@ function renderCheck(d) {
   el('checkMesa').textContent = d.mesa;
   el('checkOP').textContent = d.ordem || (d.planeado ? '-' : 'Não planeada');
   el('checkProvadores').textContent = d.planeado ? `${d.numeroProvadoresFeitos}/${d.numeroProvadoresNecessarios}` : '-';
-  el('checkPartidos').textContent = d.planeado && d.frascosPartidos !== null ? `${d.frascosPartidos} (${d.rolhasPartidas ?? 0} rolhas)` : '-';
+  el('checkPartidos').textContent = d.planeado && d.frascosPartidos !== null ? `${d.frascosPartidos} frascos · ${d.rolhasPartidas ?? 0} rolhas` : '-';
 
   const card = el('estadoCard');
   const btnAbrir = el('btnAbrir');
@@ -224,7 +224,7 @@ el('btnAbrir').onclick = async () => {
 function abrirTelaOpen(horaAbertura) {
   el('openMesa').textContent = estado.mesa;
   const sm = estado.statusMesa;
-  el('openPartidos').textContent = sm && sm.planeado && sm.frascosPartidos !== null ? `${sm.frascosPartidos} (${sm.rolhasPartidas ?? 0} rolhas)` : '-';
+  el('openPartidos').textContent = sm && sm.planeado && sm.frascosPartidos !== null ? `${sm.frascosPartidos} frascos · ${sm.rolhasPartidas ?? 0} rolhas` : '-';
   el('openHora').textContent = horaAbertura
     ? new Date(horaAbertura).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })
     : '-';
@@ -514,7 +514,7 @@ function dadosOrdem() {
   const rolhas = valorSeg('segRolhas'), tipo = valorSeg('segTipo'), cont = valorSeg('segContadeira'), dsrol = valorSeg('segDsrol');
   const frascos = Number(el('colTotal').value);
   if (!ordemValida(ordem)) throw new Error('Nº de ordem inválido: só números e a começar por 150, 151 ou 950.');
-  if (!Number.isInteger(frascos) || frascos < 1) throw new Error('Indica a quantidade de frascos da ordem.');
+  if (!Number.isInteger(frascos) || frascos < 1) throw new Error('Indica a quantidade total de frascos (a distribuir pelas mesas).');
   if (!rolhas) throw new Error('Escolhe as rolhas por frasco (1, 2 ou 4).');
   if (!tipo) throw new Error('Escolhe o tipo: EUR, GRUPO ou AMOSTRA.');
   if (!cont) throw new Error('Indica se tem contadeira (Sim ou Não).');
@@ -535,6 +535,7 @@ el('btnCalcular').onclick = async () => {
         <div><b>${s.jaTem > 0 ? `${s.mesa}-${s.seq}` : s.mesa}</b> · frascos ${s.de}–${s.ate} (${fmt(s.frascos)} frascos · ${fmt(s.rolhas)} rolhas)${s.jaTem > 0 ? `<br/><small>A mesa ${s.mesa} já tem ${s.jaTem} ${s.jaTem === 1 ? 'ordem' : 'ordens'}: esta fica ${s.mesa}-${s.seq} (a mesa vai ter mais ordens).</small>` : ''}</div>
         <div class="prop-campos">
           <label>Frascos partidos<input type="number" inputmode="numeric" min="0" max="${s.frascos}" placeholder="0" class="pPart" /></label>
+          <label>Rolhas partidas (nº real)<input type="number" inputmode="numeric" min="0" placeholder="auto" class="pRolP" /></label>
           <label>QVs (rolhas)<input type="number" inputmode="numeric" min="0" placeholder="0" class="pQv" /></label>
         </div></div>`).join('');
     el('colProposta').innerHTML = `<div class="bloco-rolhas"><b>Proposta:</b> ${fmt(p.frascos)} frascos × ${p.rolhasPorFrasco} = ${fmt(p.totalRolhas)} rolhas em ${p.segmentos.length} ${p.segmentos.length === 1 ? 'mesa' : 'mesas'} (lado ${p.lado})</div>
@@ -555,6 +556,7 @@ async function confirmarOrdem() {
     mesa: l.dataset.mesa,
     partidos: l.querySelector('.pPart').value.trim() === '' ? 0 : Number(l.querySelector('.pPart').value),
     qvs: l.querySelector('.pQv').value.trim() === '' ? 0 : Number(l.querySelector('.pQv').value),
+    rolhasPartidas: l.querySelector('.pRolP').value.trim() === '' ? null : Number(l.querySelector('.pRolP').value),
   }));
   el('btnConfirmarOrdem').disabled = true;
   try {
@@ -570,8 +572,7 @@ function folhaMesaColocada(codigo) {
   const m = logDados.mesas.find((x) => x.mesa === codigo);
   if (!m) return;
   const segs = m.segmentos || [];
-  const linhas = segs.length ? segs.map((s) => `<div class="prop-linha"><div><b>${segs.length > 1 ? `${m.mesa}-${s.seq || '?'} · ` : ''}OP ${s.op}</b> · frascos ${s.de}–${s.ate} (${fmt(s.frascos)} frascos × ${s.rolhasPorFrasco} = ${fmt(s.rolhas)} rolhas)<br/>Partidos: ${fmt(s.frascosPartidos)} (${fmt(s.rolhasPartidas)} rolhas) · QVs: ${fmt(s.qvs)} · ${s.contadeira ? 'contadeira' : 'sem contadeira'} · ${s.tipo}${s.dsrol ? ' · DSROL' : ''}</div>
-      <button class="secundario" data-op="${s.op}" style="margin-top:6px;">Tirar esta ordem</button></div>`).join('')
+  const linhas = segs.length ? segs.map((s) => `<div class="prop-linha"><div><b>${segs.length > 1 ? `${m.mesa}-${s.seq || '?'} · ` : ''}OP ${s.op}</b> · frascos ${s.de}–${s.ate} (${fmt(s.frascos)} frascos × ${s.rolhasPorFrasco} = ${fmt(s.rolhas)} rolhas)<br/>Partidos: ${fmt(s.frascosPartidos)} (${fmt(s.rolhasPartidas)} rolhas) · QVs: ${fmt(s.qvs)} · ${s.contadeira ? 'contadeira' : 'sem contadeira'} · ${s.tipo}${s.dsrol ? ' · DSROL' : ''}</div></div>`).join('')
     : '<div class="aviso-hand">Mesa livre: sem ordens.</div>';
   abrirFolha(`<h3>Mesa ${m.mesa}</h3>
     <div class="bloco-rolhas">Capacidade: <b>${fmt(m.capacidade)}</b> frascos · ocupado até ao frasco <b>${fmt(m.ocupado)}</b>${segs.length ? `<br/>Total da mesa: <b>${fmt(m.totalRolhas)}</b> rolhas` : ''}</div>
@@ -579,13 +580,6 @@ function folhaMesaColocada(codigo) {
     <button class="secundario" id="mcX">Fechar</button>
     <div class="msg-erro" id="mcErro"></div>`);
   el('mcX').onclick = fecharFolha;
-  el('sheetBox').querySelectorAll('button[data-op]').forEach((b) => {
-    b.onclick = async () => {
-      if (!confirm(`Tirar a ordem ${b.dataset.op} desta mesa (e das outras mesas onde esteja)?`)) return;
-      try { await enviar('/api/logistica/ordem/remover', { data: dataLogistica(), ordem: b.dataset.op, pin: colocarHoje ? pinSessao : undefined }); fecharFolha(); carregarLogistica(); }
-      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('mcErro').textContent = e.message; }
-    };
-  });
 }
 
 // ----- Câmara: ler o nº de ordem (código de barras / QR) -----
@@ -1068,21 +1062,28 @@ function htmlEditorOrdens(m) {
     ${campoNum('eoFr' + i, 'Frascos da ordem', g.frascos)}
     ${optSel('eoRol' + i, 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], g.rolhasPorFrasco)}
     ${campoNum('eoPart' + i, 'Frascos partidos', g.frascosPartidos)}
+    ${campoNum('eoRolP' + i, 'Rolhas partidas (nº real)', g.rolhasPartidas)}
     ${campoNum('eoQv' + i, 'QVs colocação (rolhas)', g.qvs)}
     ${optSel('eoTipo' + i, 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
     ${optSel('eoCont' + i, 'Contadeira', sn, g.contadeira ? 1 : 0)}
     ${optSel('eoDsrol' + i, 'DSROL', sn, g.dsrol ? 1 : 0)}
     ${campoNum('eoEnc' + i, 'Encomenda (rolhas)', g.encomenda)}
     ${optSel('eoCm' + i, 'Continua amanhã', sn, g.continua ? 1 : 0)}
-    <button class="secundario" id="eoSave${i}">Guardar esta ordem</button></div></details>`).join('');
+    <button class="secundario" id="eoSave${i}">Guardar esta ordem</button>
+    <button class="secundario" id="eoDel${i}" style="color:#a31d00;">Tirar esta ordem</button></div></details>`).join('');
 }
 function ligarEditorOrdens(m, data, recarregar) {
   (m.segmentos || []).forEach((g, i) => {
+    el('eoDel' + i).onclick = async () => {   // só a supervisão tira ordens
+      if (!confirm(`Tirar a ordem ${g.op} desta mesa (e das outras mesas onde esteja)?`)) return;
+      try { await enviar('/api/logistica/ordem/remover', { data, ordem: g.op, pin: pinSessao }); fecharFolha(); carregarLogistica(); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }
+    };
     el('eoSave' + i).onclick = async () => {
       el('edErro').textContent = '';
       try {
         await enviar('/api/supervisora/ordem', { pin: pinSessao, data, mesa: m.mesa, op: g.op, novaOrdem: el('eoOp' + i).value.trim(),
-          frascos: lerNum('eoFr' + i), rolhasPorFrasco: Number(el('eoRol' + i).value), frascosPartidos: lerNum('eoPart' + i) ?? 0, qvs: lerNum('eoQv' + i) ?? 0,
+          frascos: lerNum('eoFr' + i), rolhasPorFrasco: Number(el('eoRol' + i).value), frascosPartidos: lerNum('eoPart' + i) ?? 0, rolhasPartidas: lerNum('eoRolP' + i) ?? null, qvs: lerNum('eoQv' + i) ?? 0,
           tipo: el('eoTipo' + i).value, contadeira: el('eoCont' + i).value === '1', dsrol: el('eoDsrol' + i).value === '1', encomenda: lerNum('eoEnc' + i), continua: el('eoCm' + i).value === '1' });
         carregarLogistica(); recarregar();
       } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('edErro').textContent = e.message; }

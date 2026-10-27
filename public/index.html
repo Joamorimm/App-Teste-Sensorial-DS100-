@@ -306,7 +306,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
           <div class="dica" id="dicaOrdem">Tem de começar por 150, 151 ou 950</div>
         </div>
         <div class="campo">
-          <label>Quantidade de frascos da ordem</label>
+          <label>Quantidade total de frascos / mesas</label>
           <input type="number" id="colTotal" inputmode="numeric" min="1" placeholder="Ex: 95" />
         </div>
         <div class="campo">
@@ -402,7 +402,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
         <div class="linha"><span>Mesa</span><b id="checkMesa">-</b></div>
         <div class="linha"><span>OP / Lote</span><b id="checkOP">-</b></div>
         <div class="linha"><span>Provadores</span><b id="checkProvadores">-</b></div>
-        <div class="linha"><span>Frascos partidos</span><b id="checkPartidos">-</b></div>
+        <div class="linha"><span>Partidos (frascos · rolhas)</span><b id="checkPartidos">-</b></div>
       </div>
       <button class="primario" id="btnAbrir" style="margin-top:16px;">Abrir mesa</button>
       <button class="secundario" id="btnOutraMesa">Analisar outra mesa</button>
@@ -415,7 +415,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
         <div class="selo">✅</div>
         <h2>Mesa <span id="openMesa">-</span></h2>
         <p>Registo aberto às <span id="openHora">-</span></p>
-        <p style="margin-top:6px;">Frascos partidos: <b id="openPartidos">-</b></p>
+        <p style="margin-top:6px;">Partidos (frascos · rolhas): <b id="openPartidos">-</b></p>
       </div>
       <button class="primario" id="btnConcluir" style="margin-top:20px;">Concluir análise</button>
       <div class="msg-erro" id="erroOpen"></div>

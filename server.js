@@ -472,7 +472,7 @@ async function recalcularLote(client, data, mesa) {
        total_rolhas = EXCLUDED.total_rolhas, rolhas_partidas_total = EXCLUDED.rolhas_partidas_total`,
     [mesa, g.map((x) => x.op).join(' + '), data, amostra ? 3 : 2, Math.max(...rolhas), soma((x) => x.frascos), g.some((x) => x.contadeira),
       soma((x) => x.qvs), amostra ? 'AMOSTRA' : g[0].tipo, g.some((x) => x.dsrol), soma((x) => x.frascos_partidos),
-      soma((x) => x.frascos * x.rolhas_por_frasco), soma((x) => x.frascos_partidos * x.rolhas_por_frasco)]);
+      soma((x) => x.frascos * x.rolhas_por_frasco), soma((x) => (x.rolhas_partidas !== null && x.rolhas_partidas !== undefined ? x.rolhas_partidas : x.frascos_partidos * x.rolhas_por_frasco))]);
 }
 
 // valida o dia (mesma regra da colocação por mesas): amanhã é livre; hoje (a meio do processo) só com a palavra-passe da supervisora
@@ -541,16 +541,18 @@ app.post('/api/logistica/ordem/confirmar', async (req, res) => {
       const qv = d.qvs === undefined || d.qvs === '' || d.qvs === null ? 0 : Number(d.qvs);
       if (!Number.isInteger(part) || part < 0 || part > s.frascos) return res.status(400).json({ erro: `Frascos partidos da mesa ${s.mesa}: número inteiro entre 0 e ${s.frascos}.` });
       if (!Number.isInteger(qv) || qv < 0) return res.status(400).json({ erro: `QVs da mesa ${s.mesa}: número inteiro (0 ou mais).` });
-      s.partidos = part; s.qvs = qv;
+      const rp = d.rolhasPartidas === undefined || d.rolhasPartidas === '' || d.rolhasPartidas === null ? null : Number(d.rolhasPartidas);
+      if (rp !== null && (!Number.isInteger(rp) || rp < 0 || rp > s.frascos * o.rolhas)) return res.status(400).json({ erro: `Rolhas partidas da mesa ${s.mesa}: número inteiro entre 0 e ${s.frascos * o.rolhas}.` });
+      s.partidos = part; s.qvs = qv; s.rolhasPart = rp;
     }
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       for (const s of a.segmentos) {
         await client.query(
-          `INSERT INTO lote_ops (data, mesa, op, de, ate, frascos, rolhas_por_frasco, frascos_partidos, qvs, contadeira, tipo, dsrol, seq)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, COALESCE((SELECT MAX(seq) FROM lote_ops WHERE data = $1 AND mesa = $2), (SELECT COUNT(*) FROM lote_ops WHERE data = $1 AND mesa = $2)) + 1)`,
-          [ctx.data, s.mesa, o.op, s.de, s.ate, s.frascos, o.rolhas, s.partidos, s.qvs, b.contadeira, b.tipo, b.dsrol]);
+          `INSERT INTO lote_ops (data, mesa, op, de, ate, frascos, rolhas_por_frasco, frascos_partidos, qvs, contadeira, tipo, dsrol, rolhas_partidas, seq)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, COALESCE((SELECT MAX(seq) FROM lote_ops WHERE data = $1 AND mesa = $2), (SELECT COUNT(*) FROM lote_ops WHERE data = $1 AND mesa = $2)) + 1)`,
+          [ctx.data, s.mesa, o.op, s.de, s.ate, s.frascos, o.rolhas, s.partidos, s.qvs, b.contadeira, b.tipo, b.dsrol, s.rolhasPart === undefined ? null : s.rolhasPart]);
         await recalcularLote(client, ctx.data, s.mesa);
       }
       await client.query(`INSERT INTO ordens (op, encomenda) VALUES ($1, $2) ON CONFLICT (op) DO UPDATE SET encomenda = EXCLUDED.encomenda`, [o.op, encomenda]);
@@ -562,6 +564,7 @@ app.post('/api/logistica/ordem/confirmar', async (req, res) => {
 });
 app.post('/api/logistica/ordem/remover', async (req, res) => {
   try {
+    if (!verificarPin(req, res)) return;   // tirar uma ordem é ação da supervisão
     const ctx = await contextoColocacao(req, res); if (!ctx) return;
     const op = String((req.body || {}).ordem || '').trim();
     const r = await pool.query(`SELECT mesa FROM lote_ops WHERE data = $1 AND op = $2`, [ctx.data, op]);
@@ -617,7 +620,7 @@ async function infoOrdensDia(data) {
 }
 function segFormatado(s) {
   return { op: s.op, seq: s.seq || null, de: s.de, ate: s.ate, frascos: s.frascos, rolhasPorFrasco: s.rolhas_por_frasco, rolhas: s.frascos * s.rolhas_por_frasco,
-    frascosPartidos: s.frascos_partidos, rolhasPartidas: s.frascos_partidos * s.rolhas_por_frasco, qvs: s.qvs,
+    frascosPartidos: s.frascos_partidos, rolhasPartidas: s.rolhas_partidas !== null && s.rolhas_partidas !== undefined ? s.rolhas_partidas : s.frascos_partidos * s.rolhas_por_frasco, qvs: s.qvs,
     misuQvs: s.misu_qvs || 0,
     ligeiros: s.misu_ligeiros === null || s.misu_ligeiros === undefined ? null : s.misu_ligeiros, fortes: s.misu_fortes === null || s.misu_fortes === undefined ? null : s.misu_fortes, contadeira: s.contadeira, tipo: s.tipo, dsrol: s.dsrol };
 }
@@ -1233,20 +1236,25 @@ app.post('/api/supervisora/ordem', async (req, res) => {
     }
     if (b.frascosPartidos !== undefined) { const v = Number(b.frascosPartidos); if (!Number.isInteger(v) || v < 0) return res.status(400).json({ erro: 'Frascos partidos: número inteiro (0 ou mais).' }); n.frascos_partidos = v; }
     if (n.frascos_partidos > n.frascos) return res.status(400).json({ erro: 'Há mais frascos partidos do que frascos.' });
+    if (b.rolhasPartidas !== undefined) {
+      if (b.rolhasPartidas === null || b.rolhasPartidas === '') n.rolhas_partidas = null;
+      else { const v = Number(b.rolhasPartidas); if (!Number.isInteger(v) || v < 0) return res.status(400).json({ erro: 'Rolhas partidas: número inteiro (0 ou mais).' }); n.rolhas_partidas = v; }
+    }
+    if (n.rolhas_partidas !== null && n.rolhas_partidas !== undefined && n.rolhas_partidas > n.frascos * n.rolhas_por_frasco) return res.status(400).json({ erro: 'Há mais rolhas partidas do que rolhas na ordem.' });
     if (b.qvs !== undefined) { const v = Number(b.qvs); if (!Number.isInteger(v) || v < 0) return res.status(400).json({ erro: 'QVs: número inteiro (0 ou mais).' }); n.qvs = v; }
     if (b.contadeira !== undefined) { if (typeof b.contadeira !== 'boolean') return res.status(400).json({ erro: 'Contadeira: sim ou não.' }); n.contadeira = b.contadeira; }
     if (b.dsrol !== undefined) { if (typeof b.dsrol !== 'boolean') return res.status(400).json({ erro: 'DSROL: sim ou não.' }); n.dsrol = b.dsrol; }
     if (b.tipo !== undefined) { if (!['EUR', 'GRUPO', 'AMOSTRA'].includes(String(b.tipo))) return res.status(400).json({ erro: 'Tipo: EUR, GRUPO ou AMOSTRA.' }); n.tipo = b.tipo; }
     // o que o MISU apontou tem de continuar a caber nas rolhas da ordem
     const rolhas = n.frascos * n.rolhas_por_frasco;
-    const contam = (n.contadeira ? 0 : (n.misu_ligeiros || 0)) + (n.misu_fortes || 0) + n.frascos_partidos * n.rolhas_por_frasco;
+    const contam = (n.contadeira ? 0 : (n.misu_ligeiros || 0)) + (n.misu_fortes || 0) + (n.rolhas_partidas !== null && n.rolhas_partidas !== undefined ? n.rolhas_partidas : n.frascos_partidos * n.rolhas_por_frasco);
     if (contam > rolhas) return res.status(400).json({ erro: 'O que já foi apontado (ligeiros, fortes e partidas) passa as rolhas da ordem. Corrige primeiro o MISU.' });
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(
-        `UPDATE lote_ops SET op = $1, frascos = $2, ate = $3, rolhas_por_frasco = $4, frascos_partidos = $5, qvs = $6, contadeira = $7, tipo = $8, dsrol = $9 WHERE data = $10 AND mesa = $11 AND op = $12`,
-        [n.op, n.frascos, n.ate, n.rolhas_por_frasco, n.frascos_partidos, n.qvs, n.contadeira, n.tipo, n.dsrol, data, mesa, op]);
+        `UPDATE lote_ops SET op = $1, frascos = $2, ate = $3, rolhas_por_frasco = $4, frascos_partidos = $5, qvs = $6, contadeira = $7, tipo = $8, dsrol = $9, rolhas_partidas = $13 WHERE data = $10 AND mesa = $11 AND op = $12`,
+        [n.op, n.frascos, n.ate, n.rolhas_por_frasco, n.frascos_partidos, n.qvs, n.contadeira, n.tipo, n.dsrol, data, mesa, op, n.rolhas_partidas === undefined ? null : n.rolhas_partidas]);
       await recalcularLote(client, data, mesa);
       // as propriedades da ORDEM (nº, rolhas por frasco, tipo, contadeira, DSROL) valem para todas as mesas onde ela está
       const outras = await client.query(`SELECT DISTINCT mesa FROM lote_ops WHERE data = $1 AND op = $2 AND mesa <> $3`, [data, op, mesa]);

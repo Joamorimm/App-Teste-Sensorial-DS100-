@@ -167,3 +167,6 @@ CREATE TABLE IF NOT EXISTS versoes (
   resumo TEXT,
   dados JSONB NOT NULL
 );
+
+-- Rolhas partidas REAIS por ordem/mesa (frascos vazios ou com menos rolhas); NULL = frascos partidos x rolhas por frasco
+ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS rolhas_partidas INTEGER;
