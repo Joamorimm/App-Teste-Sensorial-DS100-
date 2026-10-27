@@ -40,6 +40,34 @@ test('versões: restaurar o estado anterior com a palavra-passe da supervisora',
   assert.strictEqual((await api('POST', '/api/supervisora/versoes/restaurar', { pin: '8126', id: 999999 })).status, 404);
 });
 
+test('métricas dos provadores (supervisora)', async () => {
+  await lote('A1', '15007551', 2);
+  await fechadoHa('A1', 'Marta Santos', 30);
+  assert.strictEqual((await api('POST', '/api/supervisora/provadores-metricas', { dias: 7 })).status, 401);
+  const r = (await api('POST', '/api/supervisora/provadores-metricas', { pin: '8126', dias: 7 })).body;
+  assert.strictEqual(r.resumo.mesas, 1);
+  const m = r.provadores.find((x) => x.nome === 'Marta Santos');
+  assert.deepStrictEqual([m.mesas, m.provasFechadas, m.abertas], [1, 1, 0]);
+  assert.ok(m.mediaMin >= 0);
+});
+
+test('fechar provas em lote: intervalo de mesas com exceção e 2 provadores', async () => {
+  const hoje = plan.hojeLisboa();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 100000, rolhasPorFrasco: 2, contadeira: false };
+  const Lh = await require('../logic').ladoHoje();
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, ordem: '15102800', frascos: 1000 })).status, 200);
+  const mesas = (await api('GET', `/api/logistica/mesas?data=${hoje}`)).body.mesas.filter((m) => m.estado !== 'sem_lote').map((m) => m.mesa);
+  assert.ok(mesas.length >= 3);
+  const exc = mesas[1];
+  assert.strictEqual((await api('POST', '/api/supervisora/fechar-provas', { lado: Lh, de: 1, ate: 50, excecoes: [exc], provadores: 2 })).status, 401);
+  const r = await api('POST', '/api/supervisora/fechar-provas', { pin: '8126', lado: Lh, de: 1, ate: 50, excecoes: [exc], provadores: 2 });
+  assert.strictEqual(r.status, 200);
+  assert.ok(!r.body.fechadas.includes(exc) && r.body.fechadas.length === mesas.length - 1);
+  const est = (await api('GET', `/api/logistica/mesas?data=${hoje}`)).body.mesas;
+  assert.strictEqual(est.find((m) => m.mesa === mesas[0]).estado, 'misu');
+  assert.strictEqual(est.find((m) => m.mesa === exc).estado, 'em_prova');
+});
+
 test('mesa sem lote hoje abre de imediato (não planeada)', async () => {
   const e = (await api('GET', '/api/mesa/Z99?aprovador=Marta Santos')).body;
   assert.strictEqual(e.planeado, false);
@@ -937,3 +965,12 @@ test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)
   assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);
 });
 
+
+test('contador do provador: total e lista das mesas feitas hoje', async () => {
+  await lote('A1', '15007551', 2);
+  await fechadoHa('A1', 'Marta Santos', 30);
+  const r = (await api('GET', `/api/aprovador/${encodeURIComponent('Marta Santos')}/mesas-hoje`)).body;
+  assert.strictEqual(r.mesas, 1);
+  assert.strictEqual(r.lista[0].mesa, 'A1');
+  assert.match(r.lista[0].hora, /^\d\d:\d\d$/);
+});

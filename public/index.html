@@ -222,7 +222,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
     </div>
     <div class="login-banner">
       <div id="tituloHeader">Escolhe a área</div>
-      <div class="contador-pill" id="contadorMesasWrap" style="display:none;"><span class="dot"></span><span id="contadorMesas"></span></div>
+      <div class="contador-pill" id="contadorMesasWrap" style="display:none;"><span class="dot"></span><span id="contadorMesas"></span><span style="margin-left:6px;opacity:.7;">▾</span></div>
     </div>
   </div>
 
@@ -269,10 +269,12 @@ details.prop-linha[open]>summary::after{content:'▴';}
       <div id="editHub" class="card" style="display:none;margin-bottom:12px;">
         <p class="intro" style="margin-top:0;font-size:18px;font-weight:800;color:#1f3d1a;">Menu Supervisão</p>
         <button class="hub-btn" id="hubProvadores">Provadores · lista de nomes</button>
+        <button class="hub-btn" id="hubMetricas">Provadores · provas, mesas e métricas</button>
         <button class="hub-btn" id="hubProvas">Provas de uma mesa · editar ou apagar</button>
         <button class="hub-btn" id="hubMesas">Colocação e levantamento · editar campos</button>
         <button class="hub-btn" id="hubOrdens">Ordens · encomenda e decisões</button>
         <button class="hub-btn" id="hubDias">Dias de trabalho · incluir sábado</button>
+        <button class="hub-btn" id="hubFecharProvas">Fechar provas em lote (intervalo de mesas)</button>
         <button class="hub-btn" id="hubVersoes">Restaurar versão anterior</button>
         <button class="hub-btn" id="btnHistorico">Descarregar movimentos (CSV)</button>
       </div>

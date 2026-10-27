@@ -99,12 +99,22 @@ let _diaContador = isoLocal(new Date());
 // à meia-noite os contadores zeram: volta a ler o valor do servidor quando o dia muda ou a app volta ao primeiro plano
 setInterval(() => { const h = isoLocal(new Date()); if (h !== _diaContador) { _diaContador = h; atualizarContador(); } }, 30000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { _diaContador = isoLocal(new Date()); atualizarContador(); } });
+el('contadorMesasWrap').style.cursor = 'pointer';
+el('contadorMesasWrap').onclick = async () => {   // tocar no contador: ver quais as mesas feitas hoje
+  await atualizarContador();
+  const l = estado.mesasHoje || [];
+  abrirFolha(`<h3>Mesas feitas hoje</h3>
+    ${l.length ? `<div class="bloco-rolhas">${l.map((x) => `<b>${esc(x.mesa)}</b> · fechada às ${x.hora}`).join('<br/>')}</div>` : '<div class="aviso-hand">Ainda não fechaste nenhuma mesa hoje.</div>'}
+    <button class="secundario" id="mhX">Fechar</button>`);
+  el('mhX').onclick = fecharFolha;
+};
 async function atualizarContador() {
   if (!estado.aprovador) return;
   try {
     const r = await fetch(`/api/aprovador/${encodeURIComponent(estado.aprovador)}/mesas-hoje`);
     const d = await r.json();
-    el('contadorMesas').textContent = `${d.mesas} mesas feitas hoje`;
+    el('contadorMesas').textContent = `${d.mesas} ${d.mesas === 1 ? 'mesa feita' : 'mesas feitas'} hoje`;
+    estado.mesasHoje = d.lista || [];
     if (!el('telaLogin').classList.contains('ativa')) el('contadorMesasWrap').style.display = 'inline-flex';
   } catch (e) { /* silencioso */ }
 }
@@ -839,21 +849,22 @@ function folhaMisuOrdens(m) {
   const rpf = (g) => g.rolhasPorFrasco || 1;
   const blocos = segs.map((g, i) => `<div class="prop-linha">
     <div><b>${rotuloOrdem(m, g, i)} · OP ${g.op}</b> · ${fmt(g.frascos)} frascos × ${rpf(g)} rolhas = ${fmt(g.rolhas)} rolhas · <b>${g.contadeira ? 'vai à contadeira' : 'não vai à contadeira'}</b>${g.frascosPartidos ? ` · partidos ${fmt(g.frascosPartidos)} frascos` : ''}</div>
-    <div class="grid2">${g.contadeira ? '' : campoNum('misuLig' + i, 'Frascos ligeiros', g.ligeiros === null || g.ligeiros === undefined ? '' : g.ligeiros / rpf(g), bloq)}
-    ${campoNum('misuFor' + i, 'Frascos fortes', g.fortes === null || g.fortes === undefined ? '' : g.fortes / rpf(g), bloq)}</div>
+    <div class="grid2">${g.contadeira ? '' : campoNum('misuLig' + i, 'Rolhas ligeiras', g.ligeiros === null || g.ligeiros === undefined ? '' : g.ligeiros, bloq)}
+    ${campoNum('misuFor' + i, 'Rolhas fortes', g.fortes === null || g.fortes === undefined ? '' : g.fortes, bloq)}</div>
     <div class="soma-qv" id="misuApr${i}"></div>
     ${g.contadeira ? '<div class="dica">Com contadeira o MISU conta só os fortes; os ligeiros são da contadeira.</div>' : ''}
   </div>`).join('');
   abrirFolha(`<h3>Mesa ${m.mesa}</h3>${linhasRolhas(m)}
-    ${bloq ? '<div class="aviso-hand">MISU já registado. Só a supervisora pode alterar.</div>' : '<div class="aviso-hand">O MISU conta em FRASCOS: a app multiplica pelas rolhas por frasco (1, 2 ou 4). Trabalha à mesa, mas aponta por ordem.</div>'}
+    ${bloq ? '<div class="aviso-hand">MISU já registado. Só a supervisora pode alterar.</div>' : '<div class="aviso-hand">O MISU conta em ROLHAS (o número real). Trabalha à mesa, mas aponta por ordem.</div>'}
     ${blocos}
     ${bloq ? '' : '<button class="primario" id="misuOk">Guardar</button>'}
     <button class="secundario" id="misuX">Fechar</button>
     <div class="msg-erro" id="misuErro"></div>`);
   el('misuX').onclick = fecharFolha;
   const atualizar = () => segs.forEach((g, i) => {
-    const l = el('misuLig' + i) ? (lerNum('misuLig' + i) || 0) : 0, f = lerNum('misuFor' + i) || 0, r = rpf(g);
-    el('misuApr' + i).innerHTML = (g.contadeira ? '' : `${fmt(l)} frascos ligeiros × ${r} = ${fmt(l * r)} rolhas<br/>`) + `${fmt(f)} frascos fortes × ${r} = ${fmt(f * r)} rolhas`;
+    const l = el('misuLig' + i) ? (lerNum('misuLig' + i) || 0) : 0, f = lerNum('misuFor' + i) || 0;
+    const ap = g.rolhas - l - f - (g.rolhasPartidas || 0);
+    el('misuApr' + i).innerHTML = g.contadeira ? `Fortes: <b>${fmt(f)}</b> rolhas` : `${fmt(g.rolhas)} − ${fmt(l)} ligeiras − ${fmt(f)} fortes − ${fmt(g.rolhasPartidas || 0)} partidas = <b>${fmt(ap)}</b> aprovadas`;
   });
   segs.forEach((g, i) => { if (el('misuLig' + i)) el('misuLig' + i).oninput = atualizar; el('misuFor' + i).oninput = atualizar; });
   atualizar();
@@ -862,12 +873,12 @@ function folhaMisuOrdens(m) {
     el('misuErro').textContent = '';
     const ordens = {};
     for (let i = 0; i < segs.length; i++) {
-      const g = segs[i], r = rpf(g);
+      const g = segs[i];
       const f = lerNum('misuFor' + i), l = el('misuLig' + i) ? lerNum('misuLig' + i) : 0;
-      if (f === undefined || l === undefined) { el('misuErro').textContent = `Ordem ${g.op}: aponta os frascos de aroma ${g.contadeira ? 'forte' : 'ligeiro e forte'} (pode ser 0).`; return; }
-      if (!Number.isInteger(f) || !Number.isInteger(l) || f < 0 || l < 0) { el('misuErro').textContent = `Ordem ${g.op}: indica frascos inteiros.`; return; }
-      if (f + l > g.frascos) { el('misuErro').textContent = `Ordem ${g.op}: ${f + l} frascos contaminados é mais do que os ${g.frascos} frascos da ordem nesta mesa.`; return; }
-      ordens[g.op] = { ligeiros: g.contadeira ? undefined : l * r, fortes: f * r };
+      if (f === undefined || l === undefined) { el('misuErro').textContent = `Ordem ${g.op}: aponta as rolhas de aroma ${g.contadeira ? 'forte' : 'ligeiro e forte'} (pode ser 0).`; return; }
+      if (!Number.isInteger(f) || !Number.isInteger(l) || f < 0 || l < 0) { el('misuErro').textContent = `Ordem ${g.op}: indica rolhas inteiras.`; return; }
+      if (f + l + (g.rolhasPartidas || 0) > g.rolhas) { el('misuErro').textContent = `Ordem ${g.op}: ligeiras + fortes (${f + l}) + partidas (${g.rolhasPartidas || 0}) é mais do que as ${g.rolhas} rolhas da ordem nesta mesa.`; return; }
+      ordens[g.op] = { ligeiros: g.contadeira ? undefined : l, fortes: f };
     }
     try { await enviar('/api/misu/' + m.mesa, { ordens }); fecharFolha(); carregarLogistica(); }
     catch (e) { el('misuErro').textContent = e.message; }
@@ -1193,3 +1204,74 @@ document.addEventListener('visibilitychange', () => {
   if (['editar', 'editarMesas', 'editarProvas'].includes(logModo) && el('telaLogistica').classList.contains('ativa')) definirModo('colocar');
   else pinSessao = null;
 });
+
+
+// ----- Supervisão: provadores · provas, mesas e métricas -----
+let metDias = 1;
+async function folhaMetricas(dias) {
+  if (dias) metDias = dias;
+  let d;
+  try { d = await enviar('/api/supervisora/provadores-metricas', { pin: pinSessao, dias: metDias }); }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  const min = (v) => (v === null || v === undefined ? '-' : String(v).replace('.', ',') + ' min');
+  const r = d.resumo;
+  const per = { 1: 'Hoje', 7: 'Últimos 7 dias', 30: 'Últimos 30 dias' };
+  const blocos = d.provadores.map((p, i) => `<details class="prop-linha"><summary>${esc(p.nome)} · ${p.mesas} ${p.mesas === 1 ? 'mesa' : 'mesas'} · média ${min(p.mediaMin)}</summary>
+    <div class="grid2" style="margin-bottom:8px;">
+      <div class="bloco-rolhas" style="margin:0;">Mesas feitas<br/><b>${p.mesas}</b></div><div class="bloco-rolhas" style="margin:0;">Provas fechadas<br/><b>${p.provasFechadas}</b></div>
+      <div class="bloco-rolhas" style="margin:0;">Tempo médio<br/><b>${min(p.mediaMin)}</b></div><div class="bloco-rolhas" style="margin:0;">Mais rápida / lenta<br/><b>${min(p.minMin)} / ${min(p.maxMin)}</b></div>
+      <div class="bloco-rolhas" style="margin:0;">Provas por fechar<br/><b>${p.abertas}</b></div><div class="bloco-rolhas" style="margin:0;">Dias ativos<br/><b>${p.diasAtivos}</b>${p.diasAtivos > 1 ? ` · ${(p.mesas / p.diasAtivos).toFixed(1).replace('.', ',')} mesas/dia` : ''}</div>
+    </div>
+    <div class="bloco-rolhas" style="margin:0;">${p.provas.map((x) => `${dataPT(x.dia)} · <b>${esc(x.mesa)}</b> · ${x.abertura}${x.fecho ? '–' + x.fecho : ''} · ${x.estado === 'Fechado' ? min(x.minutos) : '<b>aberta</b>'}`).join('<br/>')}</div></details>`).join('');
+  abrirFolha(`<h3>Provadores · métricas</h3>
+    <div class="seg" id="segMet" style="margin-bottom:10px;">${[1, 7, 30].map((n) => `<button data-v="${n}" class="${n === metDias ? 'ativa' : ''}">${n === 1 ? 'Hoje' : n + ' dias'}</button>`).join('')}</div>
+    <div class="grid2">
+      <div class="bloco-rolhas" style="margin:0;">Mesas feitas<br/><b style="font-size:20px;">${r.mesas}</b></div><div class="bloco-rolhas" style="margin:0;">Provas fechadas<br/><b style="font-size:20px;">${r.provas}</b></div>
+      <div class="bloco-rolhas" style="margin:0;">Provadores ativos<br/><b style="font-size:20px;">${r.provadores}</b></div><div class="bloco-rolhas" style="margin:0;">Tempo médio por prova<br/><b style="font-size:20px;">${min(r.mediaMin)}</b></div>
+    </div>
+    ${r.abertas ? `<div class="aviso-hand">${r.abertas} ${r.abertas === 1 ? 'prova aberta por fechar' : 'provas abertas por fechar'} neste período.</div>` : ''}
+    <p class="intro" style="margin:10px 0 0;">${per[metDias]} · por provador (toca para ver as provas)</p>
+    ${blocos || '<div class="aviso-hand">Sem provas neste período.</div>'}
+    ${d.provadores.length ? '<button class="secundario" id="metCsv">Descarregar provas (CSV)</button>' : ''}
+    <button class="secundario" id="metX">Fechar</button>`);
+  el('metX').onclick = fecharFolha;
+  el('segMet').querySelectorAll('button').forEach((b) => { b.onclick = () => folhaMetricas(Number(b.dataset.v)); });
+  if (el('metCsv')) el('metCsv').onclick = () => {
+    const linhas = [['provador', 'data', 'mesa', 'abertura', 'fecho', 'minutos', 'estado']];
+    d.provadores.forEach((p) => p.provas.forEach((x) => linhas.push([p.nome, x.dia, x.mesa, x.abertura, x.fecho || '', x.minutos === null ? '' : String(x.minutos).replace('.', ','), x.estado])));
+    const csv = '﻿' + linhas.map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a'); a.href = url; a.download = `provas_provadores_${isoLocal(new Date())}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+}
+el('hubMetricas').onclick = () => folhaMetricas(1);
+
+
+// ----- Supervisão: fechar provas em lote -----
+function folhaFecharProvas() {
+  abrirFolha(`<h3>Fechar provas em lote</h3>
+    <div class="aviso-hand">Fecha as provas das mesas de hoje no intervalo indicado (as mesas das exceções não são tocadas). Cada mesa fica com o nº de provadores indicado, com provas fechadas, pronta para o MISU e a logística.</div>
+    <div class="grid2">
+      <div class="sheet-campo"><label>Lado</label><input id="fpLado" value="B" maxlength="1" style="text-transform:uppercase;" /></div>
+      <div class="sheet-campo"><label>Provadores por mesa</label><input id="fpN" type="number" inputmode="numeric" value="2" /></div>
+      <div class="sheet-campo"><label>Da mesa nº</label><input id="fpDe" type="number" inputmode="numeric" value="7" /></div>
+      <div class="sheet-campo"><label>Até à mesa nº</label><input id="fpAte" type="number" inputmode="numeric" value="31" /></div>
+      <div class="sheet-campo cheio"><label>Exceções (separadas por vírgula)</label><input id="fpExc" value="B24" style="text-transform:uppercase;" /></div>
+    </div>
+    <button class="primario" id="fpOk">Fechar provas</button>
+    <button class="secundario" id="fpX">Fechar janela</button>
+    <div class="msg-erro" id="fpErro"></div><div class="msg-ok" id="fpMsg" style="display:none;"></div>`);
+  el('fpX').onclick = fecharFolha;
+  el('fpOk').onclick = async () => {
+    el('fpErro').textContent = ''; el('fpMsg').style.display = 'none';
+    const lado = el('fpLado').value.trim().toUpperCase(), de = Number(el('fpDe').value), ate = Number(el('fpAte').value), n = Number(el('fpN').value), exc = el('fpExc').value.toUpperCase();
+    if (!confirm(`Fechar as provas das mesas ${lado}${de} a ${lado}${ate}${exc ? ' (exceto ' + exc + ')' : ''} com ${n} provadores?`)) return;
+    try {
+      const r = await enviar('/api/supervisora/fechar-provas', { pin: pinSessao, lado, de, ate, provadores: n, excecoes: exc });
+      el('fpMsg').innerHTML = `Provas fechadas em ${r.fechadas.length} mesas.${r.semLote.length ? `<br/>Sem colocação hoje (não tocadas): ${r.semLote.join(', ')}.` : ''}`;
+      el('fpMsg').style.display = ''; carregarLogistica();
+    } catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('fpErro').textContent = e.message; }
+  };
+}
+el('hubFecharProvas').onclick = () => folhaFecharProvas();

@@ -169,3 +169,7 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v66: título 'Menu Supervisão'.
 - v67: Ordens · logística em grelha de 2 cartões compactos; separadores Por levantar / Levantadas.
 - v68: botão ↻ Limpar no formulário de Colocar.
+- v69: MISU volta a contar em rolhas (valor real).
+- v70: tocar em 'N mesas feitas hoje' mostra a lista de mesas (com hora de fecho).
+- v71: Menu Supervisão → Provadores · provas, mesas e métricas (hoje/7/30 dias, CSV).
+- v72: Menu Supervisão → Fechar provas em lote (intervalo de mesas, exceções, nº de provadores).

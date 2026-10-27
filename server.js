@@ -23,6 +23,7 @@ const ACOES = [
   [/^\/api\/contadeira\/op\/([^/]+)$/, 'contadeira'],
   [/^\/api\/supervisora\/mesa\/([^/]+)$/, 'edicao_supervisora'],
   [/^\/api\/supervisora\/reset$/, 'limpeza_dados_teste'],
+  [/^\/api\/supervisora\/fechar-provas$/, 'fecho_provas_lote'],
   [/^\/api\/supervisora\/versoes\/restaurar$/, 'restauro_versao'],
   [/^\/api\/supervisora\/dias-extra$/, 'edicao_dias_uteis'],
   [/^\/api\/supervisora\/seed-teste$/, 'carregar_ordens_teste'],
@@ -37,8 +38,8 @@ const ACOES = [
 const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
 // --- Versões: cópia dos dados antes de alterações importantes (e, no máximo, de 15 em 15 min nas restantes) ---
 const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia'];
-const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão' };
-const FORTES = new Set(['limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
+const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', fecho_provas_lote: 'fecho de provas em lote' };
+const FORTES = new Set(['fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
 async function guardarVersao(motivo, cli) {
   const q = cli || pool;
   const dados = {};
@@ -92,12 +93,15 @@ app.get('/api/aprovador/:nome/mesas-hoje', async (req, res) => {
   try {
     const { nome } = req.params;
     const r = await pool.query(
-      `SELECT COUNT(DISTINCT mesa)::int AS n FROM registos
+      `SELECT mesa, MAX(hora_fecho) AS fecho, to_char(MAX(hora_fecho) AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS hora
+       FROM registos
        WHERE aprovador = $1 AND estado = 'Fechado'
-         AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`,
+         AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon')
+         AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
+       GROUP BY mesa ORDER BY MAX(hora_fecho) DESC`,
       [nome]
     );
-    res.json({ mesas: r.rows[0].n });
+    res.json({ mesas: r.rows.length, lista: r.rows.map((x) => ({ mesa: x.mesa, hora: x.hora })) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao contar mesas' });
@@ -845,6 +849,87 @@ app.post('/api/supervisora/versoes/restaurar', async (req, res) => {
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao restaurar a versão.' }); }
 });
+// --- Supervisora: métricas dos provadores (provas e mesas efetuadas, tempos) ---
+app.post('/api/supervisora/provadores-metricas', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const dias = [1, 7, 30].includes(Number((req.body || {}).dias)) ? Number(req.body.dias) : 1;
+    const r = await pool.query(
+      `SELECT id, mesa, aprovador, estado, ordem,
+              to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD') AS dia,
+              to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura,
+              to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho,
+              CASE WHEN hora_fecho IS NOT NULL THEN ROUND(EXTRACT(EPOCH FROM (hora_fecho - hora_abertura)) / 60.0, 1) END AS minutos
+       FROM registos
+       WHERE hora_abertura >= (((now() AT TIME ZONE 'Europe/Lisbon')::date - ($1::int - 1))::timestamp AT TIME ZONE 'Europe/Lisbon')
+       ORDER BY hora_abertura DESC`, [dias]);
+    const por = new Map();
+    for (const x of r.rows) {
+      if (!por.has(x.aprovador)) por.set(x.aprovador, { nome: x.aprovador, provas: [] });
+      por.get(x.aprovador).provas.push({ id: x.id, mesa: x.mesa, dia: x.dia, abertura: x.abertura, fecho: x.fecho, minutos: x.minutos === null ? null : Number(x.minutos), estado: x.estado });
+    }
+    const med = (a) => (a.length ? Math.round((a.reduce((t, v) => t + v, 0) / a.length) * 10) / 10 : null);
+    const provadores = [...por.values()].map((p) => {
+      const fech = p.provas.filter((x) => x.estado === 'Fechado' && x.minutos !== null && x.minutos >= 0);
+      const mins = fech.map((x) => x.minutos);
+      return {
+        nome: p.nome, provasFechadas: p.provas.filter((x) => x.estado === 'Fechado').length, abertas: p.provas.filter((x) => x.estado !== 'Fechado').length,
+        mesas: new Set(p.provas.filter((x) => x.estado === 'Fechado').map((x) => x.dia + x.mesa)).size,
+        diasAtivos: new Set(p.provas.map((x) => x.dia)).size,
+        mediaMin: med(mins), minMin: mins.length ? Math.min(...mins) : null, maxMin: mins.length ? Math.max(...mins) : null,
+        provas: p.provas.slice(0, 200),
+      };
+    }).sort((a, b) => b.mesas - a.mesas || a.nome.localeCompare(b.nome));
+    const todasMin = r.rows.filter((x) => x.estado === 'Fechado' && x.minutos !== null && Number(x.minutos) >= 0).map((x) => Number(x.minutos));
+    const mesasTot = new Set(r.rows.filter((x) => x.estado === 'Fechado').map((x) => x.dia + x.mesa)).size;
+    res.json({ ok: true, dias, resumo: { provas: r.rows.filter((x) => x.estado === 'Fechado').length, abertas: r.rows.filter((x) => x.estado !== 'Fechado').length, mesas: mesasTot, provadores: provadores.length, mediaMin: med(todasMin) }, provadores });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter as métricas.' }); }
+});
+
+// --- Supervisora: fechar provas em lote (intervalo de mesas, com exceções) para poder avançar com a logística ---
+app.post('/api/supervisora/fechar-provas', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const b = req.body || {};
+    const lado = String(b.lado || '').toUpperCase();
+    const de = Number(b.de), ate = Number(b.ate), n = Number(b.provadores || 2);
+    const exc = new Set((Array.isArray(b.excecoes) ? b.excecoes : String(b.excecoes || '').split(/[\s,;]+/)).map((x) => String(x).toUpperCase()).filter(Boolean));
+    if (!['A', 'B'].includes(lado) || !Number.isInteger(de) || !Number.isInteger(ate) || de < 1 || ate < de || ate > 60) return res.status(400).json({ erro: 'Indica o lado (A ou B) e o intervalo de mesas (de, até).' });
+    if (!Number.isInteger(n) || n < 1 || n > 6) return res.status(400).json({ erro: 'Nº de provadores: 1 a 6.' });
+    const hoje = plan.hojeLisboa();
+    const nomes = (await pool.query(`SELECT nome FROM aprovadores WHERE ativo = true ORDER BY nome`)).rows.map((r) => r.nome);
+    const lotes = (await pool.query(`SELECT mesa, ordem FROM lotes WHERE data_planeamento = $1 AND ativo = true`, [hoje])).rows
+      .filter((l) => l.mesa[0] === lado && Number(l.mesa.slice(1)) >= de && Number(l.mesa.slice(1)) <= ate && !exc.has(l.mesa))
+      .sort((a, c) => Number(a.mesa.slice(1)) - Number(c.mesa.slice(1)));
+    const DIA0 = `((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon')`;
+    const feitas = [], semLote = [];
+    for (let k = de; k <= ate; k++) { const c = lado + k; if (!exc.has(c) && !lotes.some((l) => l.mesa === c)) semLote.push(c); }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const l of lotes) {
+        await client.query(`UPDATE lotes SET numero_provadores = $1 WHERE mesa = $2 AND data_planeamento = $3`, [n, l.mesa, hoje]);
+        await client.query(`UPDATE registos SET estado = 'Fechado', hora_fecho = now() WHERE mesa = $1 AND estado = 'Aberto' AND hora_abertura >= ${DIA0}`, [l.mesa]);
+        const reg = (await client.query(`SELECT aprovador, estado FROM registos WHERE mesa = $1 AND hora_abertura >= ${DIA0}`, [l.mesa])).rows;
+        const fechadas = reg.filter((x) => x.estado === 'Fechado').length;
+        const usados = new Set(reg.map((x) => x.aprovador));
+        const carga = new Map((await client.query(`SELECT aprovador, COUNT(DISTINCT mesa)::int AS c FROM registos WHERE estado = 'Fechado' AND hora_fecho >= ${DIA0} GROUP BY aprovador`)).rows.map((r) => [r.aprovador, r.c]));
+        const livres = nomes.filter((x) => !usados.has(x)).sort((a, c) => (carga.get(a) || 0) - (carga.get(c) || 0));
+        let add = 0;
+        for (let i = 0; fechadas + add < n && i < livres.length; i++, add++) {
+          await client.query(
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - interval '20 minutes', ${DIA0} + interval '1 minute'), GREATEST(now() - interval '10 minutes', ${DIA0} + interval '2 minutes'), 'Fechado', $3)`,
+            [l.mesa, livres[i], l.ordem]);
+          carga.set(livres[i], (carga.get(livres[i]) || 0) + 1);
+        }
+        feitas.push(l.mesa);
+      }
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    res.json({ ok: true, fechadas: feitas, semLote, excecoes: [...exc] });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao fechar as provas.' }); }
+});
+
 app.post('/api/supervisora/ordens', async (req, res) => {
   try {
     if (!verificarPin(req, res)) return;
