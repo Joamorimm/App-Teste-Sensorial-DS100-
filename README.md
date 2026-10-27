@@ -186,3 +186,5 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v83: textos selecionáveis/copiáveis em toda a app (botões e mesas continuam sem seleção).
 - v84: menu inicial: Provadores, Logística, Contadeira.
 - v85: barra de procura dos provadores maior; corrigido conflito de estilo com a nova barra de OP.
+- v86: supervisão corrige diretamente os valores da contadeira (OK, ligeiras, QVs, sobras) e as QVs da logística, por OP e por dia.
+- v87: nota na colocação: apontar só frascos (não rolhas).

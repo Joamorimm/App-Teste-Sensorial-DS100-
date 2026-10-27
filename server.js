@@ -23,6 +23,7 @@ const ACOES = [
   [/^\/api\/contadeira\/op\/([^/]+)$/, 'contadeira'],
   [/^\/api\/supervisora\/mesa\/([^/]+)$/, 'edicao_supervisora'],
   [/^\/api\/supervisora\/reset$/, 'limpeza_dados_teste'],
+  [/^\/api\/supervisora\/ordem-valores$/, 'edicao_valores_ordem'],
   [/^\/api\/supervisora\/fechar-provas$/, 'fecho_provas_lote'],
   [/^\/api\/supervisora\/versoes\/restaurar$/, 'restauro_versao'],
   [/^\/api\/supervisora\/dias-extra$/, 'edicao_dias_uteis'],
@@ -38,8 +39,8 @@ const ACOES = [
 const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
 // --- Versões: cópia dos dados antes de alterações importantes (e, no máximo, de 15 em 15 min nas restantes) ---
 const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia'];
-const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', fecho_provas_lote: 'fecho de provas em lote' };
-const FORTES = new Set(['fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
+const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', edicao_valores_ordem: 'edição de valores da ordem', fecho_provas_lote: 'fecho de provas em lote' };
+const FORTES = new Set(['edicao_valores_ordem', 'fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
 async function guardarVersao(motivo, cli) {
   const q = cli || pool;
   const dados = {};
@@ -818,6 +819,14 @@ async function listaOrdensSupervisora() {
   const lista = await lotesDeHoje();
   const ms = lista.map((x) => formatarLote(x, contagens));
   const hojeOrds = new Map((await ordensDeHoje(ms, contagens)).map((o) => [o.op, o]));
+  const cont = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, aprovadas, ligeiros, sobras FROM contagens_op`)).rows;
+  const qv = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, qvs_logistica FROM ordens_dia`)).rows;
+  const agg = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, BOOL_OR(contadeira) AS contadeira, SUM(frascos * rolhas_por_frasco)::int AS total,
+      SUM(COALESCE(misu_fortes, 0))::int AS fortes, SUM(COALESCE(rolhas_partidas, frascos_partidos * rolhas_por_frasco))::int AS partidas FROM lote_ops GROUP BY op, data`)).rows;
+  const valoresDe = (op) => agg.filter((a) => a.op === op).map((a) => {
+    const c = cont.find((x) => x.op === op && x.d === a.d) || {}, q = qv.find((x) => x.op === op && x.d === a.d) || {};
+    return { data: a.d, contadeira: a.contadeira, total: a.total, fortes: a.fortes, partidas: a.partidas, aprovadas: c.aprovadas ?? null, ligeiras: c.ligeiros ?? null, sobras: c.sobras ?? null, qvs: q.qvs_logistica ?? 0 };
+  }).sort((x, y) => (x.data < y.data ? 1 : -1));
   return ords.map((o) => {
     const dd = dias.filter((d) => d.op === o.op);
     const ultimo = dd[dd.length - 1];
@@ -828,7 +837,7 @@ async function listaOrdensSupervisora() {
       acumulado = dd.reduce((t, d) => t + (d.aprovadas_final || 0), 0) + o.rolhas_adicionais;
       resultado = resultadoOrdem({ encomenda: o.encomenda, acumulado, continua: ultimo ? ultimo.continua : false, diaTerminado: !!(ultimo && ultimo.levantada_em), aceiteFalta: o.aceite_falta });
     }
-    return { op: o.op, encomenda: o.encomenda, acumulado, falta: o.encomenda === null ? 0 : Math.max(0, o.encomenda - acumulado), rolhasAdicionais: o.rolhas_adicionais, aceiteFalta: o.aceite_falta, resultado, dias: dd.map((d) => d.d), faseHoje: ho ? ho.fase : null, contadaHoje: ho ? ho.aprovadasDia !== null && ho.contadeira : false, contadeira: ho ? ho.contadeira : false };
+    return { op: o.op, encomenda: o.encomenda, acumulado, falta: o.encomenda === null ? 0 : Math.max(0, o.encomenda - acumulado), rolhasAdicionais: o.rolhas_adicionais, aceiteFalta: o.aceite_falta, resultado, dias: dd.map((d) => d.d), valores: valoresDe(o.op), faseHoje: ho ? ho.fase : null, contadaHoje: ho ? ho.aprovadasDia !== null && ho.contadeira : false, contadeira: ho ? ho.contadeira : false };
   });
 }
 app.post('/api/supervisora/versoes', async (req, res) => {
@@ -935,6 +944,32 @@ app.post('/api/supervisora/fechar-provas', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao fechar as provas.' }); }
 });
 
+// --- Supervisora: corrigir diretamente, a qualquer momento, os valores da contadeira (OK, ligeiras, QVs, sobras) ou as QVs da logística de uma ordem/dia ---
+app.post('/api/supervisora/ordem-valores', async (req, res) => {
+  try {
+    if (!verificarPin(req, res)) return;
+    const b = req.body || {};
+    const op = String(b.op || '').trim(), data = String(b.data || plan.hojeLisboa());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return res.status(400).json({ erro: 'Data inválida.' });
+    const ag = (await pool.query(`SELECT BOOL_OR(contadeira) AS contadeira, SUM(frascos * rolhas_por_frasco)::int AS total, SUM(COALESCE(misu_fortes, 0))::int AS fortes,
+        SUM(COALESCE(rolhas_partidas, frascos_partidos * rolhas_por_frasco))::int AS partidas FROM lote_ops WHERE data = $1 AND op = $2`, [data, op])).rows[0];
+    if (!ag || ag.total === null) return res.status(404).json({ erro: 'Esta ordem não tem colocação nesse dia.' });
+    const qv = inteiro(b.qvs);
+    if (qv === undefined || invalido(qv)) return res.status(400).json({ erro: 'Indica as QVs (nº de rolhas, 0 ou mais).' });
+    if (!ag.contadeira) {
+      await pool.query(`INSERT INTO ordens_dia (data, op, qvs_logistica) VALUES ($1,$2,$3) ON CONFLICT (data, op) DO UPDATE SET qvs_logistica = EXCLUDED.qvs_logistica`, [data, op, qv]);
+    } else {
+      const apr = inteiro(b.aprovadas), lig = inteiro(b.ligeiras), sob = inteiro(b.sobras);
+      if ([apr, lig, sob].some((v) => v === undefined || invalido(v))) return res.status(400).json({ erro: 'Indica rolhas OK, ligeiras e sobras (números inteiros, 0 ou mais).' });
+      if (sob >= 5000) return res.status(400).json({ erro: 'Sobras: menos de 5 000 rolhas (um saco completo tem 5 000).' });
+      const soma = apr + lig + ag.fortes + ag.partidas + sob;
+      if (soma !== ag.total) return res.status(400).json({ erro: `Não bate com a colocação: OK (${apr}) + ligeiras (${lig}) + fortes do MISU (${ag.fortes}) + partidas (${ag.partidas}) + sobras (${sob}) = ${soma}, e a OP tem ${ag.total} rolhas.` });
+      await pool.query(`INSERT INTO contagens_op (op, data, aprovadas, ligeiros, sobras, em) VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (op, data) DO UPDATE SET aprovadas = $3, ligeiros = $4, sobras = $5, em = now()`, [op, data, apr, lig, sob]);
+      await pool.query(`INSERT INTO ordens_dia (data, op, qvs_logistica, aprovadas_final) VALUES ($1,$2,$3,$4) ON CONFLICT (data, op) DO UPDATE SET qvs_logistica = $3, aprovadas_final = CASE WHEN ordens_dia.levantada_em IS NOT NULL THEN $4 ELSE ordens_dia.aprovadas_final END`, [data, op, qv, apr]);
+    }
+    res.json({ ok: true, ordens: await listaOrdensSupervisora() });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao guardar os valores.' }); }
+});
 app.post('/api/supervisora/ordens', async (req, res) => {
   try {
     if (!verificarPin(req, res)) return;

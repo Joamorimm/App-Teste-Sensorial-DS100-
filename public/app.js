@@ -843,6 +843,10 @@ async function folhaOrdensSup(lista) {
   const blocos = ord.map((o) => `<details class="prop-linha ${o.resultado === 'pendente' ? 'pendente' : ''}"${o.resultado === 'pendente' ? ' open' : ''}><summary>OP ${o.op} · ${RES_TXT[o.resultado] || o.resultado}</summary>
     <div style="margin-top:6px;">Encomenda ${fmt(o.encomenda)} · acumulado ${fmt(o.acumulado)}${o.falta ? ' · <b>faltam ' + fmt(o.falta) + '</b>' : ''}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''}</div>
     <div class="prop-campos"><label>Rolhas<input type="number" inputmode="numeric" min="1" class="osN" data-op="${o.op}" placeholder="nº" /></label></div>
+    ${(o.valores || []).length ? `<div class="bloco-rolhas" style="margin-top:10px;"><b>Valores do dia (corrigir)</b>
+      <div class="sheet-campo" style="margin-top:6px;"><label>Dia</label><select class="ovDia" data-op="${o.op}">${o.valores.map((v) => `<option value="${v.data}">${dataPT(v.data)}</option>`).join('')}</select></div>
+      <div class="grid2" id="ovCampos_${o.op}"></div>
+      <button class="secundario" data-vg="${o.op}">Guardar valores deste dia</button></div>` : ''}
     <button class="secundario" data-a="acrescentar" data-op="${o.op}" style="margin-top:6px;">Acrescentar rolhas à encomenda</button>
     <button class="secundario" data-a="encomenda" data-op="${o.op}" style="margin-top:6px;">Alterar a quantidade encomendada</button>
     ${o.resultado === 'pendente' ? `<button class="primario" data-a="aceitar" data-op="${o.op}" style="margin-top:6px;">Aceitar a falta (${fmt(o.falta)})</button>` : ''}
@@ -854,6 +858,26 @@ async function folhaOrdensSup(lista) {
   abrirFolha(`<h3>Ordens · encomenda e decisões</h3>${blocos || '<div class="aviso-hand">Ainda não há ordens.</div>'}
     <button class="secundario" id="osX">Fechar</button><div class="msg-erro" id="osErro"></div>`);
   el('osX').onclick = fecharFolha;
+  const campos = (op) => {
+    const o = ord.find((x) => x.op === op), dia = el('sheetBox').querySelector(`.ovDia[data-op="${op}"]`).value;
+    const v = o.valores.find((x) => x.data === dia);
+    const nv = (id, r, val) => `<div class="sheet-campo"><label>${r}</label><input type="number" inputmode="numeric" min="0" id="${id}_${op}" value="${val ?? ''}" /></div>`;
+    el('ovCampos_' + op).innerHTML = v.contadeira
+      ? nv('ovApr', 'Rolhas OK', v.aprovadas) + nv('ovLig', 'Rolhas ligeiras', v.ligeiras) + nv('ovQv', 'QVs (rolhas)', v.qvs) + nv('ovSob', 'Sobras', v.sobras)
+        + `<div class="dica" style="grid-column:1/-1;">Total da OP ${fmt(v.total)} = OK + ligeiras + fortes (${fmt(v.fortes)}) + partidas (${fmt(v.partidas)}) + sobras.</div>`
+      : nv('ovQv', 'QVs da logística (rolhas)', v.qvs) + '<div class="dica" style="grid-column:1/-1;">Sem contadeira: as aprovadas calculam-se pelo MISU e pelas partidas (edita em Colocação e levantamento).</div>';
+  };
+  el('sheetBox').querySelectorAll('.ovDia').forEach((sel) => { campos(sel.dataset.op); sel.onchange = () => campos(sel.dataset.op); });
+  el('sheetBox').querySelectorAll('button[data-vg]').forEach((b) => {
+    b.onclick = async () => {
+      const op = b.dataset.vg, dia = el('sheetBox').querySelector(`.ovDia[data-op="${op}"]`).value, v = ord.find((x) => x.op === op).valores.find((x) => x.data === dia);
+      const g = (id) => { const e = document.getElementById(id + '_' + op); return e && e.value.trim() !== '' ? Number(e.value) : undefined; };
+      const corpo = { pin: pinSessao, op, data: dia, qvs: g('ovQv') };
+      if (v.contadeira) Object.assign(corpo, { aprovadas: g('ovApr'), ligeiras: g('ovLig'), sobras: g('ovSob') });
+      try { const r = await enviar('/api/supervisora/ordem-valores', corpo); carregarLogistica(); alert('Valores guardados.'); folhaOrdensSup(r.ordens); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('osErro').textContent = e.message; }
+    };
+  });
   el('sheetBox').querySelectorAll('button[data-a]').forEach((b) => {
     b.onclick = async () => {
       const op = b.dataset.op, a = b.dataset.a;
