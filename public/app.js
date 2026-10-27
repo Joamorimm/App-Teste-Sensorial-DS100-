@@ -299,20 +299,26 @@ async function carregarLogistica() {
 }
 
 let editDia = 'hoje';   // no menu da supervisora (colocação e levantamento): mesas de hoje ou de amanhã
-let levVista = 'mesas';   // no Levantar: 'mesas' (MISU) ou 'ordens' (logística)
+let levVista = null;   // no Levantar: nada até escolher 'mesas' (MISU) ou 'ordens' (logística)
 function aplicarVistaLev() {
   const hub = logModo === 'editar';
-  const ordens = logModo === 'levantar' && levVista === 'ordens';
-  el('logTopo').style.display = hub || ordens ? 'none' : '';
-  el('logMapa').style.display = hub || ordens ? 'none' : '';
-  el('logResumoLev').style.display = !ordens && ['levantar', 'editarMesas', 'editarProvas'].includes(logModo) ? '' : 'none';
-  el('legLev').style.display = !ordens && ['levantar', 'editarMesas', 'editarProvas'].includes(logModo) ? '' : 'none';
+  const lev = logModo === 'levantar';
+  const semEscolha = lev && !levVista;
+  const ordens = lev && levVista === 'ordens';
+  const verMapa = !hub && !ordens && !semEscolha;
+  el('logTopo').style.display = verMapa ? '' : 'none';
+  el('logMapa').style.display = verMapa ? '' : 'none';
+  const resumo = verMapa && ['levantar', 'editarMesas', 'editarProvas'].includes(logModo);
+  el('logResumoLev').style.display = resumo ? '' : 'none';
+  el('legLev').style.display = resumo ? '' : 'none';
   el('levOrdens').style.display = ordens ? '' : 'none';
+  el('levEscolha').style.display = semEscolha ? '' : 'none';
   el('segVistaLev').querySelectorAll('button').forEach((b) => b.classList.toggle('ativa', b.dataset.v === levVista));
 }
 el('segVistaLev').querySelectorAll('button').forEach((b) => { b.onclick = () => { levVista = b.dataset.v; aplicarVistaLev(); carregarLogistica(); }; });
 function definirModo(modo, hojeTeste) {
   logModo = modo;
+  if (modo === 'levantar') levVista = null;   // cada vez que se entra em Levantar, escolhe-se MISU ou Logística
   colocarHoje = modo === 'colocar' && !!hojeTeste;
   if (modo === 'editar' || modo === 'editarMesas') { if (modo === 'editar') editDia = 'hoje'; definirSeg('segEditDia', editDia); }
   const edit = ['editar', 'editarMesas', 'editarProvas'].includes(modo);
@@ -663,6 +669,16 @@ function cartaoOp(o) {
   </div>`;
 }
 
+let contOps = [];
+function listarContadeira() {
+  const lista = el('listaContadeira');
+  const q = el('contBusca') ? el('contBusca').value : '';
+  const vis = contOps.filter((o) => o.op.includes(q));
+  lista.innerHTML = vis.length ? vis.map(cartaoOp).join('') : '<div class="chips-vazio">Nenhuma OP encontrada.</div>';
+  lista.querySelectorAll('.cartao-lev').forEach((c) => {
+    c.onclick = () => { if (!c.classList.contains('desativada')) folhaContadeira(levOps.find((x) => x.op === c.dataset.op)); };
+  });
+}
 async function abrirPerfil() {
   // só a contadeira (à OP) tem lista própria; o MISU e a logística trabalham no mapa vermelho/verde
   const lista = el('listaContadeira');
@@ -674,16 +690,10 @@ async function abrirPerfil() {
     const peso = { por_contar: 0, feito: 1, aguardar_levantamento: 2, aguardar_misu: 3, aguardar_provas: 4 };
     const ops = levOps.slice().sort((a, b) => peso[a.estado] - peso[b.estado]);
     if (!el('contBusca')) {
-      const inp = document.createElement('input'); inp.type = 'search'; inp.id = 'contBusca'; inp.placeholder = 'Procurar OP'; inp.inputMode = 'numeric'; inp.autocomplete = 'off'; inp.style.marginBottom = '10px';
-      lista.parentNode.insertBefore(inp, lista);
-      inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); abrirPerfil(); };
+      lista.insertAdjacentHTML('beforebegin', htmlBusca('contBusca'));
+      ligarBusca('contBusca', () => listarContadeira());
     }
-    const q = el('contBusca').value;
-    const vis = ops.filter((o) => o.op.includes(q));
-    lista.innerHTML = vis.length ? vis.map(cartaoOp).join('') : '<div class="chips-vazio">Nenhuma OP encontrada.</div>';
-    lista.querySelectorAll('.cartao-lev').forEach((c) => {
-      c.onclick = () => { if (!c.classList.contains('desativada')) folhaContadeira(levOps.find((x) => x.op === c.dataset.op)); };
-    });
+    contOps = ops; listarContadeira();
   } catch (e) { erro.textContent = 'Não foi possível carregar.'; }
 }
 
@@ -729,6 +739,17 @@ function textoResultado(o) {
   if (o.resultado === 'pendente') return `Pendente · faltam ${fmt(o.falta)} rolhas · decisão da supervisão`;
   return '';
 }
+function htmlBusca(id) {
+  return `<div class="busca"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input type="search" id="${id}" inputmode="numeric" placeholder="Procurar OP" autocomplete="off" /><button type="button" class="busca-x" data-x="${id}" aria-label="Limpar" style="display:none;">✕</button></div>`;
+}
+function ligarBusca(id, aoMudar) {
+  const i = el(id), x = document.querySelector(`[data-x="${id}"]`);
+  const sync = () => { x.style.display = i.value ? '' : 'none'; };
+  i.oninput = () => { i.value = i.value.replace(/\D/g, ''); sync(); aoMudar(i.value); };
+  x.onclick = () => { i.value = ''; sync(); aoMudar(''); i.focus(); };
+  sync();
+}
 function mesasCurto(ms) { return ms.length > 3 ? `${ms[0]}…${ms[ms.length - 1]} (${ms.length} mesas)` : ms.join(', '); }
 function cartaoOrdemLev(o) {
   const [rot, cl] = FASE_ORD[o.fase] || [o.fase, 'aguardar'];
@@ -748,12 +769,13 @@ async function renderOrdensLev() {
   await carregarLevantamento();
   const box = el('levOrdens');
   if (!el('levBusca')) {
-    box.innerHTML = `<div class="campo" style="margin-bottom:8px;"><input type="search" id="levBusca" inputmode="numeric" placeholder="Procurar OP (ex: 15007565)" autocomplete="off" /></div>
+    box.innerHTML = `${htmlBusca('levBusca')}
       <div class="seg" id="segFiltroOrd" style="margin-bottom:10px;"><button data-v="por">Por levantar</button><button data-v="lev">Levantadas</button></div><div id="levLista" class="grelha-ord"></div>`;
-    el('levBusca').oninput = () => { levBuscaTxt = el('levBusca').value.replace(/\D/g, ''); listarOrdensLev(); };
+    ligarBusca('levBusca', (v) => { levBuscaTxt = v; listarOrdensLev(); });
     el('segFiltroOrd').querySelectorAll('button').forEach((b) => { b.onclick = () => { levFiltro = b.dataset.v; listarOrdensLev(); }; });
   }
   el('levBusca').value = levBuscaTxt;
+  document.querySelector('[data-x="levBusca"]').style.display = levBuscaTxt ? '' : 'none';
   listarOrdensLev();
 }
 let levBuscaTxt = '';
@@ -789,7 +811,7 @@ function folhaOrdem(op) {
       Encomenda <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''} · hoje ${fmt(apr)} = <b>${fmt(o.acumulado)}</b><br/>
       ${o.continua ? '<b>1.º fecho</b> · a ordem continua amanhã' : (o.acumulado >= o.encomenda ? '<b>OK</b> · encomenda cumprida' : `<b>Faltam ${fmt(o.falta)} rolhas</b> · fica pendente para a supervisão`)}</div>` : ''}
     ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro; a contadeira conta depois e é lá que se apontam as QVs.</div>' : ''}
-    ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>Levantamento registado: só a supervisora pode alterar.</div>` : ''}
+    ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>${o.contSobras ? `Sobras (contadeira): ${fmt(o.contSobras)} rolhas · não entram no acumulado<br/>` : ''}Levantamento registado: só a supervisora pode alterar.</div>` : ''}
     ${o.fase === 'pronta' && !o.contadeira ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
       <button class="primario" id="ordLev" style="margin-top:10px;">Guardar QVs e levantar ordem</button>` : ''}
     ${o.fase === 'pronta' && o.contadeira ? '<button class="primario" id="ordLev" style="margin-top:10px;">Levantar ordem</button>' : ''}
@@ -947,6 +969,8 @@ function folhaContadeira(o) {
     ${campoNum('contApr', 'Rolhas OK (aprovadas)', o.aprovadas, feito)}
     ${campoNum('contLig', 'Rolhas ligeiras', o.ligeirasContadas, feito)}
     ${campoNum('contQvs', 'QVs · qualidade visual (nº de rolhas)', feito ? o.qvsLog : '', feito)}
+    ${campoNum('contSob', 'Sobras (rolhas num saco de 5 000 incompleto)', feito ? o.sobras : '', feito)}
+    <div class="dica" style="margin:-4px 0 10px;">As sobras servem para fechar as contas do dia / 1.º fecho. Não entram no acumulado da ordem: amanhã diluem-se num saco de 5 000. Escreve 0 se não houver.</div>
     ${feito ? '' : '<button class="primario" id="contOk">Guardar</button>'}
     <button class="secundario" id="contX">Fechar</button>
     <div class="msg-erro" id="contErro"></div>`);
@@ -954,9 +978,9 @@ function folhaContadeira(o) {
   if (feito) return;
   el('contOk').onclick = async () => {
     el('contErro').textContent = '';
-    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined || lerNum('contQvs') === undefined) { el('contErro').textContent = 'Indica as rolhas OK, as ligeiras e as QVs (0 se não houver).'; return; }
+    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined || lerNum('contQvs') === undefined || lerNum('contSob') === undefined) { el('contErro').textContent = 'Indica as rolhas OK, as ligeiras, as QVs e as sobras (0 se não houver).'; return; }
     try {
-      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig'), qvs: lerNum('contQvs') });
+      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig'), qvs: lerNum('contQvs'), sobras: lerNum('contSob') });
       fecharFolha(); abrirPerfil();
     } catch (e) { el('contErro').textContent = e.message; }
   };

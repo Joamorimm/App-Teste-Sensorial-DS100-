@@ -814,12 +814,14 @@ test('contadeira POR ORDEM: numa mesa partilhada, uma ordem vai à contadeira e 
   assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, qvs: 7 })).status, 400);   // faltam as ligeiras
   assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2, qvs: 7 })).status, 400);   // 190+2+4 != 200
   assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2 })).status, 400);   // faltam as QVs
-  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2, qvs: 7 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 194, ligeiras: 2, qvs: 7 })).status, 400);   // faltam as sobras
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2, qvs: 7, sobras: 5000 })).status, 400);   // sobras < 5000
+  assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 190, ligeiras: 2, qvs: 7, sobras: 4 })).status, 200);   // 190+2+4+4 = 200: as sobras fecham o dia
   assert.strictEqual((await api('POST', '/api/contadeira/op/15007565', { aprovadas: 196, ligeiras: 0, qvs: 1 })).status, 409);   // já registada
   assert.strictEqual((await LV('15102480', { qvs: 0 })).status, 200);
   assert.strictEqual((await lev(`${Lh}1`)).estadoProva, 'levantada');                                       // todas as ordens levantadas: mesa levantada
   od = (await api('GET', '/api/levantamento')).body.ordens.find((x) => x.op === '15007565');
-  assert.deepStrictEqual([od.qvs.logistica, od.aprovadasDia, od.fase, od.aguardaContadeira], [7, 194, 'levantada', false]);
+  assert.deepStrictEqual([od.qvs.logistica, od.aprovadasDia, od.fase, od.aguardaContadeira], [7, 190, 'levantada', false]);   // as sobras (4) não entram nas aprovadas/acumulado
   assert.strictEqual((await LV('15102480', { desfazer: true })).status, 403);                               // só a supervisora desfaz
   assert.strictEqual((await LV('15102480', { desfazer: true, pin: '8126' })).status, 200);
   assert.notStrictEqual((await lev(`${Lh}1`)).estadoProva, 'levantada');

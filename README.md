@@ -181,3 +181,6 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v78: 'Tipo' passa a 'Tipo de cliente' (EUR, GRUPO, AMOSTRA).
 - v79: tipo de cliente visível nos ecrãs da logística (ordens e mesa) e da contadeira.
 - v80: só um Fechar (topo) quando a janela não tem scroll; com scroll, também o do fundo.
+- v81: Levantar começa vazio: só aparece a informação depois de escolher MISU ou Logística.
+- v82: contadeira com campo Sobras (saco de 5 000 incompleto: fecha o dia, não entra no acumulado); pesquisa de OP redesenhada.
+- v83: textos selecionáveis/copiáveis em toda a app (botões e mesas continuam sem seleção).

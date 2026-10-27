@@ -14,8 +14,8 @@ html, body {
   margin: 0;
   height: 100%;
   overscroll-behavior: none;
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-user-select: text;
+  user-select: text;
   touch-action: manipulation;
 }
 

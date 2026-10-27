@@ -170,3 +170,6 @@ CREATE TABLE IF NOT EXISTS versoes (
 
 -- Rolhas partidas REAIS por ordem/mesa (frascos vazios ou com menos rolhas); NULL = frascos partidos x rolhas por frasco
 ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS rolhas_partidas INTEGER;
+
+-- Sobras da contadeira (rolhas num saco de 5 000 incompleto, para o dia seguinte): fecham o dia, não entram no acumulado
+ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras INTEGER;
