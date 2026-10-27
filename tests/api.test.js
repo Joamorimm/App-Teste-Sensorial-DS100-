@@ -98,12 +98,14 @@ test('supervisora corrige valores da contadeira e QVs a qualquer momento', async
   assert.strictEqual((await V({ op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, qvs: 1 })).status, 401);
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, qvs: 1 })).status, 200);       // 190+6+0+0+4 = 200
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 5, qvs: 1 })).status, 400);       // não bate
+  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, sobrasRej: -3, qvs: 1 })).status, 400);  // sobras rejeitadas inválidas
+  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, sobrasRej: 12, qvs: 1 })).status, 200); // só informação
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 100, ligeiras: 0, sobras: 5000, qvs: 1 })).status, 400);    // sobras < 5000
   assert.strictEqual((await V({ pin: '8126', op: '15102951', qvs: 9 })).status, 200);                                               // sem contadeira: só QVs
   assert.strictEqual((await V({ pin: '8126', op: '15109999', qvs: 9 })).status, 404);
   const l = (await api('POST', '/api/supervisora/ordens', { pin: '8126' })).body.ordens;
   const v = l.find((x) => x.op === '15102950').valores[0];
-  assert.deepStrictEqual([v.aprovadas, v.ligeiras, v.sobras, v.qvs, v.contadeira], [190, 6, 4, 1, true]);
+  assert.deepStrictEqual([v.aprovadas, v.ligeiras, v.sobras, v.qvs, v.contadeira, v.sobrasRej], [190, 6, 4, 1, true, 12]);
   assert.strictEqual(l.find((x) => x.op === '15102951').valores[0].qvs, 9);
 });
 

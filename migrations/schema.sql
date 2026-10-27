@@ -173,3 +173,5 @@ ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS rolhas_partidas INTEGER;
 
 -- Sobras da contadeira (rolhas num saco de 5 000 incompleto, para o dia seguinte): fecham o dia, não entram no acumulado
 ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras INTEGER;
+
+ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras_rej INTEGER;
