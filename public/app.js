@@ -740,7 +740,7 @@ function textoResultado(o) {
   return '';
 }
 function htmlBusca(id) {
-  return `<div class="busca"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+  return `<div class="busca-op"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
     <input type="search" id="${id}" inputmode="numeric" placeholder="Procurar OP" autocomplete="off" /><button type="button" class="busca-x" data-x="${id}" aria-label="Limpar" style="display:none;">✕</button></div>`;
 }
 function ligarBusca(id, aoMudar) {
