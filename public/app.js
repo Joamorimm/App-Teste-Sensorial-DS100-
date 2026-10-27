@@ -516,7 +516,7 @@ function dadosOrdem() {
   if (!ordemValida(ordem)) throw new Error('Nº de ordem inválido: só números e a começar por 150, 151 ou 950.');
   if (!Number.isInteger(frascos) || frascos < 1) throw new Error('Indica a quantidade total de frascos (a distribuir pelas mesas).');
   if (!rolhas) throw new Error('Escolhe as rolhas por frasco (1, 2 ou 4).');
-  if (!tipo) throw new Error('Escolhe o tipo: EUR, GRUPO ou AMOSTRA.');
+  if (!tipo) throw new Error('Escolhe o tipo de cliente: EUR, GRUPO ou AMOSTRA.');
   if (!cont) throw new Error('Indica se tem contadeira (Sim ou Não).');
   if (!dsrol) throw new Error('Indica DSROL (Sim ou Não).');
   const encomenda = Number(el('colEnc').value), cc = valorSeg('segContinua');
@@ -659,7 +659,7 @@ function cartaoOp(o) {
   const cl = { aguardar_provas: 'aguardar', aguardar_misu: 'aguardar', aguardar_levantamento: 'aguardar', por_contar: 'fazer', feito: 'feito' }[o.estado];
   return `<div class="cartao-lev${ativo ? '' : ' desativada'}${o.estado === 'por_contar' ? ' pendente' : ''}" data-op="${o.op}">
     <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
-    <div class="meta">${o.continua ? '<b>1.º fecho</b> (continua amanhã) · ' : ''}Mesas: ${o.mesas.join(', ')} · ${fmt(o.totalRolhas)} rolhas${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>Frascos partidos ${fmt(o.frascosPartidos)} (${fmt(o.rolhasPartidas)} rolhas)</div>
+    <div class="meta">Cliente: <b>${esc(o.tipo || '-')}</b> · ${o.continua ? '<b>1.º fecho</b> (continua amanhã) · ' : ''}Mesas: ${o.mesas.join(', ')} · ${fmt(o.totalRolhas)} rolhas${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>Frascos partidos ${fmt(o.frascosPartidos)} (${fmt(o.rolhasPartidas)} rolhas)</div>
   </div>`;
 }
 
@@ -692,7 +692,18 @@ function abrirFolha(html) {
   el('sheetFecharTopo').onclick = fecharFolha;   // sair sem guardar
   el('sheetBox').scrollTop = 0;
   el('modalSheet').style.display = 'flex';
+  ajustarFechar();
 }
+// só há 2 botões Fechar (topo + fundo) quando a janela tem scroll; sem scroll fica só o do topo
+function ajustarFechar() {
+  const box = el('sheetBox');
+  const baixo = [...box.querySelectorAll('button')].filter((b) => b.id !== 'sheetFecharTopo' && b.textContent.trim() === 'Fechar');
+  baixo.forEach((b) => { b.style.display = ''; });
+  if (box.scrollHeight <= box.clientHeight + 2) baixo.forEach((b) => { b.style.display = 'none'; });
+}
+window.addEventListener('resize', () => { if (el('modalSheet').style.display !== 'none') ajustarFechar(); });
+document.addEventListener('toggle', () => { if (el('modalSheet').style.display !== 'none') ajustarFechar(); }, true);
+document.addEventListener('input', () => { if (el('modalSheet').style.display !== 'none') ajustarFechar(); }, true);
 function fecharFolha() { el('modalSheet').style.display = 'none'; }
 function campoNum(id, rotulo, valor, desativado) {
   return `<div class="sheet-campo"><label>${rotulo}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="0" autocomplete="off" value="${valor ?? ''}" ${desativado ? 'disabled' : ''} /></div>`;
@@ -729,7 +740,7 @@ function cartaoOrdemLev(o) {
   return `<div class="cartao-lev ord-mini${o.fase === 'pronta' ? ' o-falta' : o.fase === 'levantada' ? ' o-ok' : ''}${['em_prova', 'misu'].includes(o.fase) ? ' desativada' : ''}" data-op="${o.op}">
     <div class="topo">${o.op}</div>
     <span class="estado ${cl}">${rot}</span>
-    <div class="meta">${mesasCurto(o.mesas)}<br/>${fmt(o.rolhas)} rolhas${nota ? ' · <b>' + nota + '</b>' : ''}</div>
+    <div class="meta"><b>${esc(o.tipo || '')}</b> · ${mesasCurto(o.mesas)}<br/>${fmt(o.rolhas)} rolhas${nota ? ' · <b>' + nota + '</b>' : ''}</div>
   </div>`;
 }
 let levFiltro = 'por';   // 'por' = por levantar (inclui em prova/MISU) | 'lev' = levantadas
@@ -770,6 +781,7 @@ function folhaOrdem(op) {
   const fase = { em_prova: 'Ainda há mesas desta ordem em prova.', misu: 'A aguardar o MISU em todas as mesas desta ordem.' }[o.fase] || '';
   const bloqAprov = !o.contadeira && apr !== null && pode;
   abrirFolha(`<h3>OP ${o.op}</h3>
+    <div class="tipo-cli">Tipo de cliente: <b>${esc(o.tipo || '-')}</b></div>
     <div class="bloco-rolhas">${linhasSeg}<br/>
       Total da ordem: <b>${fmt(o.rolhas)}</b> rolhas · ${o.tipo}${o.contadeira ? ' · vai à contadeira' : ' · sem contadeira'}${o.continua ? ' · continua amanhã' : ''}</div>
     ${fase ? `<div class="aviso-hand">${fase}</div>` : ''}
@@ -925,6 +937,7 @@ function folhaMisu(m) {
 function folhaContadeira(o) {
   const feito = o.aprovadas !== null && o.aprovadas !== undefined;
   abrirFolha(`<h3>Contadeira · OP ${o.op}</h3>
+    <div class="tipo-cli">Tipo de cliente: <b>${esc(o.tipo || '-')}</b></div>
     <div class="bloco-rolhas">Mesas da OP: <b>${o.mesas.join(', ')}</b><br/>
       Total de rolhas: <b>${fmt(o.totalRolhas)}</b><br/>
       Aromas fortes (MISU): <b>${fmt(o.fortes)}</b> rolhas · Partidas: <b>${fmt(o.rolhasPartidas)}</b> rolhas (${fmt(o.frascosPartidos)} frascos)
@@ -977,6 +990,7 @@ async function folhaLogistica(codigo) {
   }
   const q = m.qvs;
   abrirFolha(`<h3>Mesa ${m.mesa} · OP ${m.ordem || '-'}</h3>
+    <div class="tipo-cli">Tipo de cliente: <b>${esc(m.tipo || '-')}</b></div>
     ${linhasRolhas(m)}
     ${pronta && m.desvio ? `<div class="aviso-hand">${m.desvio}</div>` : pronta ? '<div class="bloco-rolhas">Confere com a colocação.</div>' : ''}
     ${pronta ? `<div class="bloco-rolhas">${bloco}</div>
@@ -1018,7 +1032,7 @@ async function folhaEditar(codigo) {
     <div class="aviso-hand">Modo supervisora: as alterações ficam registadas já.</div>
     ${linhasRolhas(m)}
     ${porOrdem ? htmlEditorOrdens(m) : `<div class="grid2">    <div class="sheet-campo cheio"><label>Nº de ordem</label><input id="edOrdem" value="${m.ordem || ''}" inputmode="numeric" /></div>
-    ${optSel('edTipo', 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], m.tipo)}
+    ${optSel('edTipo', 'Tipo de cliente', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], m.tipo)}
     ${optSel('edRolhas', 'Rolhas por frasco', [[1, '1'], [2, '2'], [4, '4']], m.rolhasPorFrasco)}
     ${campoNum('edTotal', 'Total de frascos/cliente', m.totalFrascos)}
     ${optSel('edCont', 'Contadeira', sn, m.contadeira ? 1 : 0)}
@@ -1066,7 +1080,7 @@ function htmlEditorOrdens(m) {
     ${campoNum('eoPart' + i, 'Frascos partidos', g.frascosPartidos)}
     ${campoNum('eoRolP' + i, 'Rolhas partidas (nº real)', g.rolhasPartidas)}
     ${campoNum('eoQv' + i, 'QVs colocação (rolhas)', g.qvs)}
-    ${optSel('eoTipo' + i, 'Tipo', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
+    ${optSel('eoTipo' + i, 'Tipo de cliente', [['EUR', 'EUR'], ['GRUPO', 'GRUPO'], ['AMOSTRA', 'AMOSTRA']], g.tipo)}
     ${optSel('eoCont' + i, 'Contadeira', sn, g.contadeira ? 1 : 0)}
     ${optSel('eoDsrol' + i, 'DSROL', sn, g.dsrol ? 1 : 0)}
     ${campoNum('eoEnc' + i, 'Encomenda (rolhas)', g.encomenda)}

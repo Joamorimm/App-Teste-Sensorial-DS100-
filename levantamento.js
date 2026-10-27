@@ -88,7 +88,7 @@ function agregarOps(mesas, contagens) {
     let estado = 'aguardar_provas';
     if (prontas === o.mesas.length) estado = entregues === o.mesas.length ? (feito ? 'feito' : 'por_contar') : 'aguardar_misu';
     return {
-      op: o.op, mesas: o.mesas.map((m) => m.mesa), nMesas: o.mesas.length, prontas, entregues,
+      op: o.op, tipo: ((o.mesas[0].segmentos || []).find((g) => g.op === o.op) || o.mesas[0]).tipo || o.mesas[0].tipo || null, mesas: o.mesas.map((m) => m.mesa), nMesas: o.mesas.length, prontas, entregues,
       totalRolhas: o.totalRolhas, rolhasPartidas: o.rolhasPartidas, frascosPartidos: o.frascosPartidos, partilhada: o.partilhada,
       ligeiros: o.lig, fortes: o.fort, contaminados: o.lig + o.fort, // apontados pelo MISU, à mesa
       aprovadas: c.aprovadas ?? null,                                  // contadas pela contadeira, à OP

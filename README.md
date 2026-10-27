@@ -178,3 +178,6 @@ Para a app arrancar já com estes dados, define no Railway (Variables): `SEED_TE
 - v75: rótulo 'Quantidade total de frascos (a distribuir pelas mesas)'.
 - v76: rótulo 'Quantidade total de frascos / mesas'.
 - v77: ordens com contadeira: a logística só levanta; as QVs apontam-se na contadeira (junto das rolhas OK e ligeiras). Sem contadeira: igual.
+- v78: 'Tipo' passa a 'Tipo de cliente' (EUR, GRUPO, AMOSTRA).
+- v79: tipo de cliente visível nos ecrãs da logística (ordens e mesa) e da contadeira.
+- v80: só um Fechar (topo) quando a janela não tem scroll; com scroll, também o do fundo.
