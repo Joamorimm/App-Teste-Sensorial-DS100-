@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const pool = require('./db');
-const { obterEstadoMesa, ladoHoje } = require('./logic');
+const { obterEstadoMesa, ladoHoje, ladosHoje } = require('./logic');
 const { derivar, opsDoLote, agregarOps } = require('./levantamento');
 const plan = require('./planeamento');
 
@@ -30,6 +30,7 @@ const ACOES = [
   [/^\/api\/supervisora\/seed-teste$/, 'carregar_ordens_teste'],
   [/^\/api\/supervisora\/provadores$/, 'edicao_provadores'],
   [/^\/api\/supervisora\/registo\/(\d+)$/, 'edicao_prova_mesa'],
+  [/^\/api\/supervisora\/mover-mesa$/, 'mover_mesa'],
   [/^\/api\/supervisora\/ordem$/, 'edicao_ordem'],
   [/^\/api\/logistica\/ordem\/confirmar$/, 'colocacao_ordem'],
   [/^\/api\/logistica\/ordem\/remover$/, 'remocao_ordem'],
@@ -39,8 +40,8 @@ const ACOES = [
 const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
 // --- Versões: cópia dos dados antes de alterações importantes (e, no máximo, de 15 em 15 min nas restantes) ---
 const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia'];
-const MOTIVOS = { colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', edicao_valores_ordem: 'edição de valores da ordem', fecho_provas_lote: 'fecho de provas em lote' };
-const FORTES = new Set(['edicao_valores_ordem', 'fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
+const MOTIVOS = { mover_mesa: 'mesa passada para outro dia', colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', edicao_valores_ordem: 'edição de valores da ordem', fecho_provas_lote: 'fecho de provas em lote' };
+const FORTES = new Set(['mover_mesa', 'edicao_valores_ordem', 'fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
 async function guardarVersao(motivo, cli) {
   const q = cli || pool;
   const dados = {};
@@ -282,6 +283,8 @@ app.get('/api/logistica/mesas', async (req, res) => {
       `SELECT mesa, ordem, numero_provadores, levantada_em, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, misu_ligeiros, misu_fortes, total_rolhas, rolhas_partidas_total FROM lotes
        WHERE data_planeamento = $1 AND ativo = true`, [data]);
     const lado = data === plan.hojeLisboa() ? await ladoHoje() : plan.ladoDoDia(data);
+    const outro = lado === 'A' ? 'B' : 'A';
+    const lados = lotes.rows.some((l) => l.mesa[0] === outro) ? [lado, outro].sort() : [lado];   // mesas passadas de outro dia podem trazer o outro lado
     const feitos = await pool.query(
       `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
        WHERE estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
@@ -296,8 +299,8 @@ app.get('/api/logistica/mesas', async (req, res) => {
     sgs.rows.forEach((s) => { if (!sgPorMesa.has(s.mesa)) sgPorMesa.set(s.mesa, []); sgPorMesa.get(s.mesa).push({ ...segFormatado(s), ...(infoOp.get(s.op) || {}) }); });
     lotes.rows.forEach((l) => { l._segs = sgPorMesa.get(l.mesa) || []; });
     const mesas = [];
-    for (let i = 1; i <= plan.MESAS[lado]; i++) {
-      const codigo = lado + i;
+    for (const ladoM of lados) for (let i = 1; i <= plan.MESAS[ladoM]; i++) {
+      const codigo = ladoM + i;
       const l = porMesa.get(codigo);
       let estado = 'sem_lote', feitosN = 0, nec = 0;
       if (l) {
@@ -316,11 +319,11 @@ app.get('/api/logistica/mesas', async (req, res) => {
         contadeira: l ? l.contadeira : null, qvs: l ? l.qvs_colocacao : null,
         tipo: l ? l.tipo : null, dsrol: l ? l.dsrol : null, frascosPartidos: l ? l.frascos_partidos : null,
         totalRolhas: l ? derivar(l).totalRolhas : null, rolhasPartidas: l ? derivar(l).rolhasPartidas : null,
-        capacidade: plan.LAYOUT[lado].cap[String(i)] || 0, ocupado: Math.max(0, ...(sgPorMesa.get(codigo) || []).map((s) => s.ate)),
+        capacidade: plan.LAYOUT[ladoM].cap[String(i)] || 0, ocupado: Math.max(0, ...(sgPorMesa.get(codigo) || []).map((s) => s.ate)),
         segmentos: sgPorMesa.get(codigo) || [],
       });
     }
-    res.json({ data, lado, mesas, filas: plan.LAYOUT[lado].filas });
+    res.json({ data, lado, mesas, filas: plan.LAYOUT[lado].filas, lados: lados.map((x) => ({ lado: x, filas: plan.LAYOUT[x].filas })) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao obter mesas da logística' });
@@ -420,12 +423,12 @@ app.post('/api/logistica/colocar', async (req, res) => {
     if (!Number.isInteger(partidos) || partidos < 0) return res.status(400).json({ erro: 'Frascos partidos: indica um número inteiro (0 ou mais).' });
     if (!Array.isArray(mesas) || !mesas.length) return res.status(400).json({ erro: 'Seleciona pelo menos uma mesa.' });
     const nProvadores = tipo === 'AMOSTRA' ? 3 : 2; // amostra = 3 provadores
-    const lado = data === hoje ? await ladoHoje() : plan.ladoDoDia(data);
+    const ladosOk = data === hoje ? await ladosHoje() : [plan.ladoDoDia(data)];
     const lista = [...new Set(mesas.map((m) => String(m).toUpperCase()))];
     for (const m of lista) {
       const n = Number(m.slice(1));
-      if (m[0] !== lado) return res.status(400).json({ erro: `A mesa ${m} não é do lado ${lado}, que é o lado deste dia.` });
-      if (!Number.isInteger(n) || n < 1 || n > plan.MESAS[lado]) return res.status(400).json({ erro: `Mesa inválida: ${m}.` });
+      if (!ladosOk.includes(m[0])) return res.status(400).json({ erro: `A mesa ${m} não é do lado ${ladosOk.join(' / ')}, que é o lado deste dia.` });
+      if (!Number.isInteger(n) || n < 1 || n > plan.MESAS[m[0]]) return res.status(400).json({ erro: `Mesa inválida: ${m}.` });
     }
     const qn = qvs === undefined || qvs === null || qvs === '' ? 0 : Number(qvs);
     if (!Number.isInteger(qn) || qn < 0) return res.status(400).json({ erro: 'QVs: indica o nº de rolhas (número inteiro, 0 ou mais).' });
@@ -530,7 +533,7 @@ app.post('/api/logistica/ordem/confirmar', async (req, res) => {
     if (typeof b.dsrol !== 'boolean') return res.status(400).json({ erro: 'Indica DSROL (sim ou não).' });
     if (typeof b.continua !== 'boolean') return res.status(400).json({ erro: 'Indica se a ordem continua amanhã (sim ou não).' });
     const encomenda = Number(b.encomenda);
-    if (!Number.isInteger(encomenda) || encomenda < 1) return res.status(400).json({ erro: 'Indica a quantidade encomendada (nº de rolhas).' });
+    if (b.encomenda === undefined || b.encomenda === null || b.encomenda === '' || !Number.isInteger(encomenda) || encomenda < 0) return res.status(400).json({ erro: 'Indica a quantidade encomendada (nº de rolhas). Escreve 0 se não houver encomenda.' });
     const a = await planoDaOrdem(ctx.data, ctx.lado, o.op, o.frascos);
     if (a.erro) return res.status(409).json({ erro: a.erro });
     if (a.semCapacidade > 0) return res.status(400).json({ erro: `Não há mesas livres suficientes no lado ${ctx.lado}: faltam espaço para ${a.semCapacidade} frascos.` });
@@ -685,7 +688,7 @@ function juntarConfere(ms, contagens) {
 function resultadoOrdem({ encomenda, acumulado, continua, diaTerminado, aceiteFalta }) {
   if (!diaTerminado) return 'em_curso';
   if (continua) return 'parcial';
-  if (encomenda === null || encomenda === undefined) return 'ok';
+  if (encomenda === null || encomenda === undefined || encomenda === 0) return 'ok';
   if (acumulado >= encomenda) return 'ok';
   return aceiteFalta ? 'ok_com_falta' : 'pendente';
 }
@@ -995,7 +998,7 @@ app.post('/api/supervisora/ordem-resultado', async (req, res) => {
       await pool.query(`UPDATE ordens SET aceite_falta = false, aceite_em = NULL WHERE op = $1`, [op]);
     } else if (b.acao === 'encomenda') {
       const n = Number(b.encomenda);
-      if (!Number.isInteger(n) || n < 1) return res.status(400).json({ erro: 'Quantidade encomendada: número inteiro (1 ou mais).' });
+      if (!Number.isInteger(n) || n < 0) return res.status(400).json({ erro: 'Quantidade encomendada: número inteiro (0 se não houver encomenda).' });
       await pool.query(`UPDATE ordens SET encomenda = $1 WHERE op = $2`, [n, op]);
     } else if (b.acao === 'reabrir_levantamento') {
       const hoje = plan.hojeLisboa();
@@ -1315,7 +1318,7 @@ app.post('/api/supervisora/ordem', async (req, res) => {
       if (b.continua !== undefined) { if (typeof b.continua !== 'boolean') throw new Error('continua'); await client.query(`UPDATE ordens_dia SET continua = $1 WHERE data = $2 AND op = $3`, [b.continua, data, n.op]); }
       if (b.encomenda !== undefined) {
         const e = Number(b.encomenda);
-        if (!Number.isInteger(e) || e < 1) throw new Error('encomenda');
+        if (!Number.isInteger(e) || e < 0) throw new Error('encomenda');
         await client.query(`UPDATE ordens SET encomenda = $1 WHERE op = $2`, [e, n.op]);
       }
       await client.query('COMMIT');
@@ -1404,6 +1407,42 @@ app.post('/api/supervisora/reset', async (req, res) => {
 
 // --- Supervisora: alterar uma mesa de hoje a meio do processo (só com a palavra-passe) ---
 // Permite corrigir a colocação, o que o MISU apontou, as QVs da logística e o valor da contadeira (por OP).
+// Passa UMA mesa (com as suas ordens) da prova de hoje para outro dia (por defeito, o dia útil seguinte), mantendo o lado (A/B) da mesa.
+app.post('/api/supervisora/mover-mesa', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!verificarPin(req, res)) return;
+    const b = req.body || {};
+    const mesa = String(b.mesa || '').toUpperCase(), hoje = plan.hojeLisboa();
+    const para = b.para ? String(b.para) : plan.diaUtilSeguinte(hoje);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(para) || para <= hoje) return res.status(400).json({ erro: 'Escolhe uma data a partir de amanhã.' });
+    if (!plan.ehDiaUtil(para)) return res.status(400).json({ erro: 'Escolhe um dia útil (segunda a sexta, ou um sábado incluído nos dias de trabalho).' });
+    await client.query('BEGIN');
+    const l = (await client.query(`SELECT * FROM lotes WHERE mesa = $1 AND data_planeamento = $2 AND ativo = true`, [mesa, hoje])).rows[0];
+    if (!l) { await client.query('ROLLBACK'); return res.status(404).json({ erro: 'Esta mesa não tem lote hoje.' }); }
+    if (l.misu_em || l.levantada_em || l.log_em) { await client.query('ROLLBACK'); return res.status(409).json({ erro: 'Esta mesa já passou pelo MISU/levantamento. Reabre-os primeiro no menu Ordens.' }); }
+    if ((await client.query(`SELECT 1 FROM lotes WHERE mesa = $1 AND data_planeamento = $2`, [mesa, para])).rowCount) { await client.query('ROLLBACK'); return res.status(409).json({ erro: `A mesa ${mesa} já tem lote em ${para}.` }); }
+    const ops = (await client.query(`SELECT DISTINCT op FROM lote_ops WHERE data = $1 AND mesa = $2`, [hoje, mesa])).rows.map((r) => r.op);
+    for (const op of ops) {
+      const d = (await client.query(`SELECT levantada_em FROM ordens_dia WHERE data = $1 AND op = $2`, [hoje, op])).rows[0];
+      const c = (await client.query(`SELECT aprovadas FROM contagens_op WHERE data = $1 AND op = $2`, [hoje, op])).rows[0];
+      if ((d && d.levantada_em) || (c && c.aprovadas !== null && c.aprovadas !== undefined)) { await client.query('ROLLBACK'); return res.status(409).json({ erro: `A ordem ${op} já foi levantada/contada hoje. Reabre-a primeiro no menu Ordens.` }); }
+    }
+    await client.query(`UPDATE lote_ops SET data = $3 WHERE data = $1 AND mesa = $2`, [hoje, mesa, para]);
+    await client.query(`UPDATE lotes SET data_planeamento = $2 WHERE id = $1`, [l.id, para]);
+    for (const op of ops) {
+      await client.query(`INSERT INTO ordens_dia (data, op, continua) SELECT $1, op, continua FROM ordens_dia WHERE data = $2 AND op = $3 ON CONFLICT (data, op) DO NOTHING`, [para, hoje, op]);
+      await client.query(`INSERT INTO ordens_dia (data, op, continua) VALUES ($1, $2, false) ON CONFLICT (data, op) DO NOTHING`, [para, op]);
+      if (!(await client.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2 LIMIT 1`, [hoje, op])).rowCount) {
+        await client.query(`DELETE FROM ordens_dia WHERE data = $1 AND op = $2`, [hoje, op]);
+        await client.query(`DELETE FROM contagens_op WHERE data = $1 AND op = $2`, [hoje, op]);
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, mesa, para });
+  } catch (err) { await client.query('ROLLBACK').catch(() => {}); console.error(err); res.status(500).json({ erro: 'Erro ao passar a mesa para outro dia.' }); }
+  finally { client.release(); }
+});
 app.post('/api/supervisora/mesa/:mesa', async (req, res) => {
   try {
     if (!verificarPin(req, res)) return;

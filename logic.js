@@ -13,6 +13,15 @@ async function ladoHoje() {
   return nB * 2 >= r.rows.length ? 'B' : 'A';
 }
 
+// Lados com mesas em prova hoje (pode haver A e B no mesmo dia quando a supervisora passa mesas de um dia para o outro)
+async function ladosHoje() {
+  const hoje = plan.hojeLisboa();
+  const r = await pool.query(`SELECT DISTINCT substr(mesa, 1, 1) AS l FROM lotes WHERE data_planeamento = $1 AND ativo = true`, [hoje]);
+  const set = new Set(r.rows.map((x) => x.l).filter((l) => l === 'A' || l === 'B'));
+  if (!set.size) set.add(plan.ladoDoDia(hoje));
+  return [...set].sort();
+}
+
 async function obterEstadoMesa(mesa, aprovador) {
   const hoje = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Lisbon' });
 
@@ -77,7 +86,8 @@ async function obterEstadoMesa(mesa, aprovador) {
   const mesaAbertaPorOutro = registoAberto && !mesaAbertaPorMim;
 
   const lado = await ladoHoje();
-  const ladoErrado = /^[AB]/.test(mesa) && mesa[0] !== lado;
+  const lados = await ladosHoje();
+  const ladoErrado = /^[AB]/.test(mesa) && !lados.includes(mesa[0]);
 
   const podeAbrir =
     !ladoErrado &&
@@ -109,10 +119,10 @@ async function obterEstadoMesa(mesa, aprovador) {
     rolhasPorFrasco: lote ? lote.rolhas_por_frasco : null,
     rolhasPartidas: lote ? derivar(lote).rolhasPartidas : null,
     tipo: lote ? lote.tipo : null,
-    ladoHoje: lado,
+    ladoHoje: lados.join(' e '),
     ladoErrado,
     podeAbrir,
   };
 }
 
-module.exports = { obterEstadoMesa, ladoHoje, MIN_INTERVALO };
+module.exports = { obterEstadoMesa, ladoHoje, ladosHoje, MIN_INTERVALO };

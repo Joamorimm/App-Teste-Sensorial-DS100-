@@ -118,22 +118,22 @@ main{margin-top:0;padding-top:16px;}
 .log-resumo{display:flex;gap:8px;margin-bottom:10px;}
 .log-kpi{flex:1;border-radius:14px;padding:10px 6px;text-align:center;display:flex;flex-direction:column;}
 .log-kpi b{font-size:24px;line-height:1.1;}.log-kpi span{font-size:11px;font-weight:700;}
-.log-kpi.verde{background:#dff3d8;color:#1b6b1a;}.log-kpi.verm{background:#fde3e0;color:#b3261e;}.log-kpi.cinza{background:#e9ecea;color:#56605a;}
+.log-kpi.verde{background:#dff3d8;color:#1b6b1a;}.log-kpi.verm{background:#ffe6c7;color:#a85400;}.log-kpi.cinza{background:#e9ecea;color:#56605a;}
 .log-lado{font-size:13px;color:var(--texto-suave);margin-bottom:10px;}
 .log-sec{font-size:11px;font-weight:800;color:var(--texto-suave);margin:10px 0 6px;letter-spacing:.5px;}
-.log-fila{display:flex;gap:6px;margin-bottom:6px;}.log-fila .mesa{flex:1;min-width:0;}.log-fila .mesa.solta{flex:0 0 50%;margin:0 auto;}.log-corredor{text-align:center;font-size:10px;color:#b4bcb7;letter-spacing:1px;text-transform:uppercase;margin:2px 0 8px;border-top:1px dashed #dfe3e0;padding-top:3px;}
+.log-fila{display:flex;gap:6px;margin-bottom:6px;}.log-fila .mesa{flex:1;min-width:0;}.log-fila .mesa.solta{flex:0 0 50%;margin:0 auto;}.log-lado{font-size:12px;font-weight:700;color:#56605a;margin:8px 0 4px;}.log-corredor{text-align:center;font-size:10px;color:#b4bcb7;letter-spacing:1px;text-transform:uppercase;margin:2px 0 8px;border-top:1px dashed #dfe3e0;padding-top:3px;}
 .mesa{border-radius:12px;padding:9px 2px 7px;text-align:center;font-weight:800;font-size:15px;line-height:1.1;cursor:pointer;border:2px solid transparent;transition:transform .08s;}
 .mesa small{display:block;font-weight:700;font-size:10px;margin-top:2px;opacity:.85;}
 .mesa:active{transform:scale(.95);}
 .mesa.pronta{background:#46962b;color:#fff;box-shadow:0 4px 10px rgba(70,150,43,.4);}
 .mesa.em_prova{background:#ffe3a0;color:#7a5200;}
-.mesa.misu{background:#e5483b;color:#fff;}
+.mesa.misu{background:#f08a1c;color:#fff;box-shadow:0 4px 10px rgba(240,138,28,.4);}
 .l-prova{background:#ffe3a0;}
 .mesa.levantada{background:#e9ecea;color:#8a948e;text-decoration:line-through;}
 .mesa.sem_lote{background:#fff;color:#c2c8c4;border-color:#eceeed;cursor:default;}
 .log-legenda{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-size:11px;color:var(--texto-suave);margin:14px 0 4px;}
 .log-legenda i{width:12px;height:12px;border-radius:4px;display:inline-block;margin-right:-4px;}
-.l-verde{background:#46962b;}.l-verm{background:#e5483b;}.l-lev{background:#cfd4d1;}.l-vazia{background:#fff;border:1px solid #d6dbd8;}
+.l-verde{background:#46962b;}.l-verm{background:#f08a1c;}.l-lev{background:#cfd4d1;}.l-vazia{background:#fff;border:1px solid #d6dbd8;}
 .modal{position:fixed;inset:0;background:rgba(10,25,12,.5);z-index:50;display:flex;align-items:flex-end;}
 .modal-box{background:#fff;width:100%;border-radius:22px 22px 0 0;padding:22px 20px calc(env(safe-area-inset-bottom) + 20px);}
 .modal-box h3{margin:0 0 6px;font-size:20px;}.modal-box p{margin:0 0 16px;color:var(--texto-suave);font-size:14px;}
@@ -338,8 +338,8 @@ details.prop-linha[open]>summary::after{content:'▴';}
         </div>
         <div class="campo">
           <label>Quantidade encomendada (nº de rolhas)</label>
-          <input type="number" id="colEnc" inputmode="numeric" min="1" placeholder="Ex: 12000" />
-          <div class="dica" id="dicaEnc">Total da ordem, mesmo que continue noutros dias</div>
+          <input type="number" id="colEnc" inputmode="numeric" min="0" placeholder="Ex: 12000 (0 se não houver)" />
+          <div class="dica" id="dicaEnc">Obrigatório. Total da ordem, mesmo que continue noutros dias. Escreve 0 se não houver encomenda.</div>
         </div>
         <div class="campo">
           <label>A ordem continua amanhã?</label>

@@ -30,9 +30,17 @@ As regras estão em: `logic.js` (provadores), `server.js` (colocação, MISU, le
 - Quando o nº de provas fechadas iguala o nº de provadores necessários, a mesa fica **pronta** para o MISU.
 - O contador "mesas feitas hoje" conta mesas distintas fechadas **no dia de Lisboa** (zera à meia-noite). Tocar mostra a lista com a hora de fecho.
 
+## 3.1 Mesas de dois lados no mesmo dia
+
+A supervisão pode passar **uma mesa** para outro dia de prova (Menu Supervisão → Provas de uma mesa → «Passar esta mesa para esse dia»; por defeito o dia útil seguinte). A mesa **mantém o seu lado** e leva as ordens consigo. Nesse dia os provadores podem provar mesas de **A e B**; o mapa da logística mostra os dois lados. Só se passa uma mesa que ainda não tenha MISU/levantamento/contagem.
+
+## 3.2 Encomenda
+
+Obrigatória em Colocar. **0 = sem encomenda** (a ordem fecha sempre OK). A supervisão pode mudá-la em Ordens («Mudar a encomenda para esta quantidade») ou na edição da ordem; voltar a colocar a mesma OP também a atualiza.
+
 ## 4. MISU
 
-- Trabalha **à mesa**, mas **aponta por ordem**, em **rolhas**.
+- Trabalha **à mesa**, mas **aponta por ordem**, em **frascos** (a app calcula as rolhas = frascos × rolhas por frasco da colocação; internamente guarda rolhas).
 - Ordem **sem contadeira**: aponta **ligeiras e fortes**. Aprovadas = rolhas da ordem − ligeiras − fortes − partidas.
 - Ordem **com contadeira**: aponta **só fortes** (as ligeiras são da contadeira).
 - Validação: ligeiras + fortes + partidas **não podem passar** as rolhas da ordem nessa mesa.
