@@ -52,3 +52,4 @@ Resumo por fases. Cada versão corresponde a um zip entregue (`ds100-app-web (vN
 - v92: mesas de dias anteriores ainda por levantar passam automaticamente para hoje (lados A e B, provas anteriores contam, data de origem no mapa).
 - v93: aviso azul 'LOTE DSROL' (com a OP) ao provador no ecrã da mesa e durante a análise.
 - v94: provas criadas em 'fechar provas em lote' marcadas como simuladas e fora das métricas dos provadores; contadeira lança contagens ao longo do dia e fecha a OP no fim; rolhas abatidas no levantamento (frascos vazios/1 rolha).
+- v95: margem de erro (%) nas contagens, configurável pela supervisora; frascos partidos editáveis no levantamento (por mesa).

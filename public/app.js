@@ -412,6 +412,20 @@ el('hubMesas').onclick = () => definirModo('editarMesas');
 el('hubProvas').onclick = () => definirModo('editarProvas');
 el('hubProvadores').onclick = () => folhaProvadores();
 el('hubDias').onclick = () => folhaDias();
+el('hubMargem').onclick = async () => {
+  let d;
+  try { d = await enviar('/api/supervisora/config', { pin: pinSessao }); }
+  catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
+  abrirFolha(`<h3>Margem de erro das contagens</h3>
+    <p class="intro" style="margin-top:0;">Diferença aceite entre o total de rolhas colocadas e a soma das contagens (OK + rejeitadas + fortes + partidas + abatidas + sobras), em % do total da OP. Ex.: 1 % em 10 000 rolhas aceita até 100 rolhas de diferença. 0 = tem de bater certo.</p>
+    <div class="sheet-campo"><label>Margem de erro (%)</label><input type="text" inputmode="decimal" id="mgPct" value="${String(d.tolerancia).replace('.', ',')}" /></div>
+    <button class="primario" id="mgOk">Guardar</button><button class="secundario" id="mgX">Fechar</button><div class="msg-erro" id="mgErro"></div>`);
+  el('mgX').onclick = fecharFolha;
+  el('mgOk').onclick = async () => {
+    try { const r = await enviar('/api/supervisora/config', { pin: pinSessao, tolerancia: el('mgPct').value }); fecharFolha(); alert(`Margem de erro guardada: ${String(r.tolerancia).replace('.', ',')} %`); }
+    catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('mgErro').textContent = e.message; }
+  };
+};
 async function folhaDias(extras) {
   try { if (!extras) extras = (await enviar('/api/supervisora/dias-extra', { pin: pinSessao, acao: 'listar' })).extras; }
   catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; alert(e.message); return; }
@@ -827,6 +841,9 @@ function folhaOrdem(op) {
       ${o.continua ? '<b>1.º fecho</b> · a ordem continua amanhã' : (o.acumulado >= o.encomenda ? '<b>OK</b> · encomenda cumprida' : `<b>Faltam ${fmt(o.falta)} rolhas</b> · fica pendente para a supervisão`)}</div>` : ''}
     ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro; a contadeira conta depois e é lá que se apontam as QVs.</div>' : ''}
     ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>${o.contSobras ? `Sobras (contadeira): ${fmt(o.contSobras)} rolhas · não entram no acumulado<br/>` : ''}Levantamento registado: só a supervisora pode alterar.</div>` : ''}
+    ${o.fase === 'pronta' ? `<div class="prop-linha"><b>Frascos partidos</b> <span class="dica">(se na embalagem apareceram mais frascos partidos)</span>
+      ${o.segmentos.map((g, i) => `<div class="grid2"><div class="sheet-campo"><label>${g.seqRotulo || g.mesa} · frascos partidos</label><input type="number" inputmode="numeric" min="0" max="${g.frascos}" id="ordPart${i}" value="${g.frascosPartidos || ''}" placeholder="0" /></div>
+      <div class="sheet-campo"><label>Rolhas partidas (nº real)</label><input type="number" inputmode="numeric" min="0" id="ordRolP${i}" value="${g.rolhasPartidas && g.rolhasPartidas !== (g.frascosPartidos || 0) * rp(g) ? g.rolhasPartidas : ''}" placeholder="auto" /></div></div>`).join('')}</div>` : ''}
     ${o.fase === 'pronta' ? `${campoNum('ordAbat', 'Rolhas a abater (frascos vazios ou com 1 rolha) · nº de ROLHAS', o.abatidas || '')}<div class="dica" style="margin:-4px 0 10px;">Como as partidas, mas em rolhas: ex. um frasco vazio numa ordem a 2 rolhas abate 2; um frasco com 1 rolha abate 1. Deixa em branco se não houver.</div>` : (lev && o.abatidas ? `<div class="bloco-rolhas">Rolhas abatidas: <b>${fmt(o.abatidas)}</b></div>` : '')}
     ${o.fase === 'pronta' && !o.contadeira ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
       <button class="primario" id="ordLev" style="margin-top:10px;">Guardar QVs e levantar ordem</button>` : ''}
@@ -845,7 +862,14 @@ function folhaOrdem(op) {
     el('ordErro').textContent = '';
     if (el('ordQvs') && lerNum('ordQvs') === undefined) { el('ordErro').textContent = 'Indica as QVs (escreve 0 se não houver).'; return; }
     try {
-      await enviar('/api/logistica/ordem/levantar', { op: o.op, ...(el('ordQvs') ? { qvs: lerNum('ordQvs') } : {}), ...(el('ordAbat') && lerNum('ordAbat') !== undefined ? { abatidas: lerNum('ordAbat') } : {}) });
+      const partidas = [];
+      o.segmentos.forEach((g, i) => {
+        if (!el('ordPart' + i)) return;
+        const fr = lerNum('ordPart' + i) || 0, real = lerNum('ordRolP' + i);
+        const manualAtual = g.rolhasPartidas !== (g.frascosPartidos || 0) * rp(g) ? g.rolhasPartidas : undefined;
+        if (fr !== (g.frascosPartidos || 0) || real !== manualAtual) partidas.push({ mesa: g.mesa, partidos: fr, rolhasPartidas: real });
+      });
+      await enviar('/api/logistica/ordem/levantar', { op: o.op, ...(partidas.length ? { partidas } : {}), ...(el('ordQvs') ? { qvs: lerNum('ordQvs') } : {}), ...(el('ordAbat') && lerNum('ordAbat') !== undefined ? { abatidas: lerNum('ordAbat') } : {}) });
       fecharFolha(); await renderOrdensLev(); carregarLogistica();
     } catch (e) { el('ordErro').textContent = e.message; }
   };
@@ -1024,13 +1048,14 @@ function folhaContadeira(o) {
       ${campoNum('contSob', 'Sobras · rolhas OK num saco de 5 000 incompleto', o.sobras, true)}
       ${campoNum('contSobRej', 'Sobras de rolhas rejeitadas', o.sobrasRej, true)}
       <div class="dica">Total OK + sobras = <b>${fmt((o.aprovadas || 0) + (o.sobras || 0))}</b></div>
+      ${o.diferenca ? `<div class="aviso-hand">Diferença aceite dentro da margem de erro: <b>${o.diferenca > 0 ? 'faltam' : 'sobram'} ${fmt(Math.abs(o.diferenca))}</b> rolhas face às colocadas.</div>` : ''}
       <button class="secundario" id="contX">Fechar</button>`);
     el('contX').onclick = fecharFolha;
     return;
   }
   const ent = o.entradas || [];
   const contado = p.aprovadas + p.ligeiras + p.sobras;
-  const porContar = o.totalRolhas - o.fortes - o.rolhasPartidas - (o.abatidas || 0) - contado;
+  const porContar = o.totalRolhas - o.fortes - o.rolhasPartidas - (o.abatidas || 0) - contado;   // pode ficar ligeiramente diferente de 0: a supervisora define a margem aceite
   abrirFolha(`${cab}
     <p class="intro" style="margin:8px 0;">A contadeira lança as contagens ao longo do dia (cada saco ou lote contado). No fim, fecha a OP.</p>
     ${ent.length ? `<div class="bloco-rolhas"><b>Contagens de hoje</b><br/>${ent.map((e, i) => `${i + 1}. ${e.hora} · OK ${fmt(e.aprovadas)} · rejeitadas ${fmt(e.ligeiros)} · QVs ${fmt(e.qvs)} · sobras ${fmt(e.sobras)} · sobras rej. ${fmt(e.sobras_rej)} <a href="#" data-ap="${e.id}" style="color:#b3261e;">apagar</a>`).join('<br/>')}

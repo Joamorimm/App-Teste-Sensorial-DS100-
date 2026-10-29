@@ -1,4 +1,4 @@
-const CACHE = 'ds100-v58';
+const CACHE = 'ds100-v59';
 const ASSETS = ['/', '/app.js', '/manifest.json', '/logo.png', '/ds100.png'];
 
 self.addEventListener('install', (e) => {

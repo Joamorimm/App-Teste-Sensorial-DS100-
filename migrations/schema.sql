@@ -197,3 +197,7 @@ CREATE TABLE IF NOT EXISTS contagens_entradas (
   em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_contagens_entradas ON contagens_entradas (op, data);
+
+-- configuração editável pela supervisora (ex.: margem de erro das contagens, em %)
+CREATE TABLE IF NOT EXISTS config (chave TEXT PRIMARY KEY, valor TEXT);
+ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS diferenca INTEGER;

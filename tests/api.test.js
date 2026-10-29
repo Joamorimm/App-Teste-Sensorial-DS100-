@@ -97,7 +97,9 @@ test('supervisora corrige valores da contadeira e QVs a qualquer momento', async
   const V = (x) => api('POST', '/api/supervisora/ordem-valores', x);
   assert.strictEqual((await V({ op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, qvs: 1 })).status, 401);
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, qvs: 1 })).status, 200);       // 190+6+0+0+4 = 200
-  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 5, qvs: 1 })).status, 400);       // não bate
+  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 10, qvs: 1 })).status, 400);      // não bate (fora da margem)
+  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 5, qvs: 1 })).status, 200);       // 1 rolha de diferença: dentro da margem de 1 %
+  assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, qvs: 1 })).status, 200);
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, sobrasRej: -3, qvs: 1 })).status, 400);  // sobras rejeitadas inválidas
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 190, ligeiras: 6, sobras: 4, sobrasRej: 12, qvs: 1 })).status, 200); // só informação
   assert.strictEqual((await V({ pin: '8126', op: '15102950', aprovadas: 100, ligeiras: 0, sobras: 5000, qvs: 1 })).status, 400);    // sobras < 5000
@@ -1086,6 +1088,34 @@ test('contadeira lança contagens ao longo do dia e fecha no fim; abatidas entra
   assert.strictEqual(o.aprovadas, 189);
   assert.strictEqual(o.abatidas, 2);
   assert.strictEqual(o.entradas.length, 3);
+});
+
+test('margem de erro das contagens é configurável pela supervisora', async () => {
+  const C = (x) => api('POST', '/api/supervisora/config', x);
+  assert.strictEqual((await C({ tolerancia: 2 })).status, 401);
+  assert.strictEqual((await C({ pin: '8126', tolerancia: 50 })).status, 400);
+  assert.strictEqual((await C({ pin: '8126', tolerancia: 0 })).body.tolerancia, 0);
+  const hoje = plan.hojeLisboa();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 0, rolhasPorFrasco: 2, contadeira: true, ordem: '15102840', frascos: 5000 };   // 10 000 rolhas
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', b)).status, 200);
+  const V = (x) => api('POST', '/api/supervisora/ordem-valores', { pin: '8126', op: '15102840', qvs: 0, ligeiras: 0, sobras: 0, ...x });
+  assert.strictEqual((await V({ aprovadas: 9998 })).status, 400);                         // margem 0 %: tem de bater
+  assert.strictEqual((await C({ pin: '8126', tolerancia: '0,5' })).body.tolerancia, 0.5);
+  assert.strictEqual((await V({ aprovadas: 9998 })).status, 200);                         // 2 rolhas de diferença: aceite (margem 50)
+  assert.strictEqual((await V({ aprovadas: 9900 })).status, 400);                         // 100 > 50
+  const v = (await api('POST', '/api/supervisora/ordens', { pin: '8126' })).body.ordens.find((x) => x.op === '15102840').valores[0];
+  assert.strictEqual(v.aprovadas, 9998);
+});
+
+test('levantamento: corrigir frascos partidos por mesa', async () => {
+  const hoje = plan.hojeLisboa(), L = await require('../logic').ladoHoje(), op = '15102850', m = L + '1';
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 0, rolhasPorFrasco: 2, contadeira: false, ordem: op, frascos: 10 })).status, 200);
+  const P = (x) => api('POST', '/api/logistica/ordem/partidas', { op, ...x });
+  assert.strictEqual((await P({ partidas: [{ mesa: m, partidos: 99 }] })).status, 400);
+  assert.strictEqual((await P({ partidas: [{ mesa: m, partidos: 3 }] })).status, 200);
+  assert.strictEqual((await P({ partidas: [{ mesa: m, partidos: 3, rolhasPartidas: 5 }] })).body.ordem.rolhasPartidas, 5);
+  const mm = (await api('GET', `/api/logistica/mesas?data=${hoje}`)).body.mesas.find((x) => x.mesa === m);
+  assert.strictEqual(mm.frascosPartidos, 3);
 });
 
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {

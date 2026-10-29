@@ -106,3 +106,11 @@ Em Levantar → Ordens · logística, quem levanta pode indicar as **rolhas a ab
 ## 3.6 Provas reais vs. fecho em lote
 
 As provas criadas pela supervisão em «Fechar provas em lote» fecham a mesa mas são marcadas como **simuladas**: **não entram** nas métricas nem nos contadores dos provadores (só entra o que aconteceu de facto no gemba).
+
+## 3.7 Margem de erro das contagens
+
+O fecho da contadeira (e a correção da supervisora) aceita uma diferença entre o total colocado e a soma das contagens até uma **margem em %** do total da OP (por defeito 1 %; 0 = tem de bater). Define-se em Menu Supervisão → «Margem de erro das contagens (%)». A diferença aceite fica guardada e visível na contagem fechada.
+
+## 3.8 Frascos partidos no levantamento
+
+Além de na colocação, quem levanta pode corrigir os **frascos partidos** (e, se quiser, o nº real de rolhas partidas) **por mesa** em Levantar → Ordens · logística, antes de levantar. A supervisão altera depois.
