@@ -157,7 +157,13 @@ async function consultarMesaSilencioso() {
   } catch (e) { /* silencioso */ }
 }
 
+function bannerDsrol(id, d) {   // aviso bem visível ao provador: o lote desta mesa é DSROL
+  const b = el(id); if (!b) return;
+  if (d && d.planeado && d.dsrol) { b.innerHTML = `LOTE DSROL<small>Esta mesa é DSROL${d.dsrolOps && d.dsrolOps.length ? ' · OP ' + d.dsrolOps.join(', ') : ''}</small>`; b.style.display = ''; }
+  else b.style.display = 'none';
+}
 function renderCheck(d) {
+  bannerDsrol('dsrolCheck', d);
   el('checkMesa').textContent = d.mesa;
   el('checkOP').textContent = d.ordem || (d.planeado ? '-' : 'Não planeada');
   el('checkProvadores').textContent = d.planeado ? `${d.numeroProvadoresFeitos}/${d.numeroProvadoresNecessarios}` : '-';
@@ -224,6 +230,7 @@ el('btnAbrir').onclick = async () => {
 function abrirTelaOpen(horaAbertura) {
   el('openMesa').textContent = estado.mesa;
   const sm = estado.statusMesa;
+  bannerDsrol('dsrolOpen', sm);
   el('openPartidos').textContent = sm && sm.planeado && sm.frascosPartidos !== null ? `${sm.frascosPartidos} frascos · ${sm.rolhasPartidas ?? 0} rolhas` : '-';
   el('openHora').textContent = horaAbertura
     ? new Date(horaAbertura).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })

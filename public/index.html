@@ -66,6 +66,7 @@ button.primario:disabled{background:#c6cbc7;box-shadow:none;}
 button.secundario{width:100%;padding:15px;font-size:14.5px;font-weight:700;background:#fff;color:var(--verde-escuro2);border:2px solid #e4e7e2;border-radius:16px;margin-top:10px;cursor:pointer;transition:transform .08s;}
 button.secundario:active{transform:scale(.97);}
 
+.dsrol-banner{background:#1f4fa3;color:#fff;font-weight:900;font-size:17px;text-align:center;padding:14px 12px;border-radius:14px;margin-bottom:14px;letter-spacing:.3px;box-shadow:0 4px 12px rgba(31,79,163,.35);}.dsrol-banner small{display:block;font-weight:600;font-size:12.5px;margin-top:3px;opacity:.95;letter-spacing:0;}
 .estado-pill{display:inline-flex;align-items:center;gap:8px;font-weight:800;font-size:14px;padding:12px 14px;border-radius:14px;margin-bottom:16px;width:100%;}
 .estado-livre{background:var(--ok-bg);color:var(--ok-tx);}
 .estado-bloqueada{background:var(--bloq-bg);color:var(--bloq-tx);}
@@ -408,6 +409,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
     <!-- TELA CHECK -->
     <section class="tela" id="telaCheck">
       <div id="estadoCard" class="estado-pill"></div>
+      <div id="dsrolCheck" class="dsrol-banner" style="display:none;"></div>
       <div class="card">
         <div class="linha"><span>Mesa</span><b id="checkMesa">-</b></div>
         <div class="linha"><span>OP / Lote</span><b id="checkOP">-</b></div>
@@ -423,6 +425,7 @@ details.prop-linha[open]>summary::after{content:'▴';}
     <section class="tela" id="telaOpen">
       <div class="card open-hero">
         <div class="selo">✅</div>
+        <div id="dsrolOpen" class="dsrol-banner" style="display:none;"></div>
         <h2>Mesa <span id="openMesa">-</span></h2>
         <p>Registo aberto às <span id="openHora">-</span></p>
         <p style="margin-top:6px;">Partidos (frascos · rolhas): <b id="openPartidos">-</b></p>

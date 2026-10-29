@@ -1045,6 +1045,15 @@ test('mesas dos dois lados no mesmo dia e passar uma mesa para o dia seguinte', 
   assert.ok(r.mesas.some((m) => m.mesa === L + '1' && m.estado === 'colocada'));
 });
 
+test('provador vê que o lote é DSROL', async () => {
+  const hoje = plan.hojeLisboa(), L = await require('../logic').ladoHoje();
+  const b = { data: hoje, pin: '8126', tipo: 'EUR', continua: false, encomenda: 0, rolhasPorFrasco: 2, contadeira: false, ordem: '15102810', frascos: 10 };
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { ...b, dsrol: true })).status, 200);
+  const e = await require('../logic').obterEstadoMesa(L + '1', 'Marta Santos');
+  assert.strictEqual(e.dsrol, true);
+  assert.deepStrictEqual(e.dsrolOps, ['15102810']);
+});
+
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {
   for (let i = 0; i < 5; i++) assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: 'x' + i })).status, 401);
   assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);

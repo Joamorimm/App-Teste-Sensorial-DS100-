@@ -85,6 +85,7 @@ async function obterEstadoMesa(mesa, aprovador) {
   const mesaAbertaPorMim = registoAberto && registoAberto.aprovador === aprovador;
   const mesaAbertaPorOutro = registoAberto && !mesaAbertaPorMim;
 
+  const dsrolOps = lote && lote.dsrol ? (await pool.query(`SELECT op FROM lote_ops WHERE data = $1 AND mesa = $2 AND dsrol = true ORDER BY de`, [hoje, mesa])).rows.map((r) => r.op) : [];
   const lado = await ladoHoje();
   const lados = await ladosHoje();
   const ladoErrado = /^[AB]/.test(mesa) && !lados.includes(mesa[0]);
@@ -119,6 +120,8 @@ async function obterEstadoMesa(mesa, aprovador) {
     rolhasPorFrasco: lote ? lote.rolhas_por_frasco : null,
     rolhasPartidas: lote ? derivar(lote).rolhasPartidas : null,
     tipo: lote ? lote.tipo : null,
+    dsrol: lote ? !!lote.dsrol : false,
+    dsrolOps,
     ladoHoje: lados.join(' e '),
     ladoErrado,
     podeAbrir,
