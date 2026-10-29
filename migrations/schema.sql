@@ -178,3 +178,22 @@ ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras_rej INTEGER;
 
 -- mesas de dias anteriores que ainda não foram levantadas passam para hoje; as provas contam desde o dia de origem
 ALTER TABLE lotes ADD COLUMN IF NOT EXISTS data_origem DATE;
+
+-- provas criadas pela supervisora (fechar provas em lote / dados de teste) não são provas reais: ficam fora das métricas dos provadores
+ALTER TABLE registos ADD COLUMN IF NOT EXISTS simulado BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE registos SET simulado = true WHERE simulado = false AND hora_fecho IS NOT NULL AND hora_fecho - hora_abertura = interval '10 minutes';
+
+-- rolhas a abater à ordem no levantamento (frascos vazios ou com 1 rolha em ordens a 2 rolhas); contagens da contadeira ao longo do dia
+ALTER TABLE ordens_dia ADD COLUMN IF NOT EXISTS rolhas_abatidas INTEGER DEFAULT 0;
+CREATE TABLE IF NOT EXISTS contagens_entradas (
+  id SERIAL PRIMARY KEY,
+  op TEXT NOT NULL,
+  data DATE NOT NULL,
+  aprovadas INTEGER NOT NULL DEFAULT 0,
+  ligeiros INTEGER NOT NULL DEFAULT 0,
+  qvs INTEGER NOT NULL DEFAULT 0,
+  sobras INTEGER NOT NULL DEFAULT 0,
+  sobras_rej INTEGER NOT NULL DEFAULT 0,
+  em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_contagens_entradas ON contagens_entradas (op, data);

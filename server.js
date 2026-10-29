@@ -35,6 +35,7 @@ const ACOES = [
   [/^\/api\/supervisora\/provadores$/, 'edicao_provadores'],
   [/^\/api\/supervisora\/registo\/(\d+)$/, 'edicao_prova_mesa'],
   [/^\/api\/supervisora\/mover-mesa$/, 'mover_mesa'],
+  [/^\/api\/logistica\/ordem\/abater$/, 'abate_rolhas'],
   [/^\/api\/supervisora\/ordem$/, 'edicao_ordem'],
   [/^\/api\/logistica\/ordem\/confirmar$/, 'colocacao_ordem'],
   [/^\/api\/logistica\/ordem\/remover$/, 'remocao_ordem'],
@@ -43,8 +44,8 @@ const ACOES = [
 ];
 const SEM_PIN = (o) => { if (!o || typeof o !== 'object' || Buffer.isBuffer(o)) return null; const c = { ...o }; delete c.pin; return JSON.stringify(c).slice(0, 4000); };
 // --- Versões: cópia dos dados antes de alterações importantes (e, no máximo, de 15 em 15 min nas restantes) ---
-const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia'];
-const MOTIVOS = { mover_mesa: 'mesa passada para outro dia', colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', edicao_valores_ordem: 'edição de valores da ordem', fecho_provas_lote: 'fecho de provas em lote' };
+const TAB_VERSAO = ['aprovadores', 'lotes', 'registos', 'contagens_op', 'lote_ops', 'dias_extra', 'ordens', 'ordens_dia', 'contagens_entradas'];
+const MOTIVOS = { abate_rolhas: 'rolhas abatidas', mover_mesa: 'mesa passada para outro dia', colocacao_ordem: 'colocação de ordem', remocao_ordem: 'ordem retirada', levantamento_ordem: 'levantamento de ordem', misu: 'MISU', contadeira: 'contadeira', decisao_ordem: 'decisão da supervisora', edicao_supervisora: 'edição da supervisora', edicao_ordem: 'edição de ordem', edicao_prova_mesa: 'edição de provas', edicao_provadores: 'edição de provadores', edicao_dias_uteis: 'dias de trabalho', limpeza_dados_teste: 'limpeza de dados', carregar_ordens_teste: 'carga de ordens', restauro_versao: 'restauro de versão', edicao_valores_ordem: 'edição de valores da ordem', fecho_provas_lote: 'fecho de provas em lote' };
 const FORTES = new Set(['mover_mesa', 'edicao_valores_ordem', 'fecho_provas_lote', 'limpeza_dados_teste', 'carregar_ordens_teste', 'restauro_versao', 'edicao_supervisora', 'edicao_ordem', 'edicao_prova_mesa', 'edicao_provadores', 'decisao_ordem', 'edicao_dias_uteis', 'remocao_ordem', 'remocao_mesas']);
 async function guardarVersao(motivo, cli) {
   const q = cli || pool;
@@ -101,7 +102,7 @@ app.get('/api/aprovador/:nome/mesas-hoje', async (req, res) => {
     const r = await pool.query(
       `SELECT mesa, MAX(hora_fecho) AS fecho, to_char(MAX(hora_fecho) AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS hora
        FROM registos
-       WHERE aprovador = $1 AND estado = 'Fechado'
+       WHERE aprovador = $1 AND estado = 'Fechado' AND simulado = false
          AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon')
          AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
        GROUP BY mesa ORDER BY MAX(hora_fecho) DESC`,
@@ -748,7 +749,8 @@ async function ordensDeHoje(ms, contagens) {
   const ops = [...porOp.keys()];
   if (!ops.length) return [];
   const ord = new Map((await pool.query(`SELECT * FROM ordens WHERE op = ANY($1)`, [ops])).rows.map((r) => [r.op, r]));
-  const dias = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, continua, qvs_logistica, levantada_em, aprovadas_final FROM ordens_dia WHERE op = ANY($1) ORDER BY data`, [ops])).rows;
+  const dias = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, continua, qvs_logistica, levantada_em, aprovadas_final, COALESCE(rolhas_abatidas, 0) AS rolhas_abatidas FROM ordens_dia WHERE op = ANY($1) ORDER BY data`, [ops])).rows;
+  const entr = (await pool.query(`SELECT id, op, aprovadas, ligeiros, qvs, sobras, sobras_rej, to_char(em AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS hora FROM contagens_entradas WHERE data = $1 ORDER BY id`, [hoje])).rows;
   const mesaPor = new Map(ms.map((m) => [m.mesa, m]));
   return ops.map((op) => {
     const o = porOp.get(op);
@@ -758,13 +760,16 @@ async function ordensDeHoje(ms, contagens) {
     const row = ord.get(op) || {};
     const meusDias = dias.filter((d) => d.op === op);
     const hojeRow = meusDias.find((d) => d.d === hoje) || {};
+    const abatidas = hojeRow.rolhas_abatidas || 0;
+    const entradas = entr.filter((e) => e.op === op);
+    const parcial = entradas.reduce((t, e) => ({ aprovadas: t.aprovadas + e.aprovadas, ligeiras: t.ligeiras + e.ligeiros, qvs: t.qvs + e.qvs, sobras: t.sobras + e.sobras, sobrasRej: t.sobrasRej + e.sobras_rej }), { aprovadas: 0, ligeiras: 0, qvs: 0, sobras: 0, sobrasRej: 0 });
     const anteriores = meusDias.filter((d) => d.d < hoje).reduce((t, d) => t + (d.aprovadas_final || 0), 0);
     const soma = (f) => segs.reduce((t, s) => t + f(s), 0);
     const todosMisu = segs.every((s) => s.fortes !== null && s.fortes !== undefined && (s.contadeira || (s.ligeiros !== null && s.ligeiros !== undefined)));
     const contagem = contagens && contagens.get(op);
     let aprovadasDia = null;
     if (cont) aprovadasDia = contagem && contagem.aprovadas !== undefined && contagem.aprovadas !== null ? contagem.aprovadas : null;
-    else if (todosMisu) aprovadasDia = soma((s) => s.rolhas - (s.ligeiros || 0) - (s.fortes || 0) - s.rolhasPartidas);
+    else if (todosMisu) aprovadasDia = Math.max(0, soma((s) => s.rolhas - (s.ligeiros || 0) - (s.fortes || 0) - s.rolhasPartidas) - abatidas);
     const rolhas = soma((s) => s.rolhas), partidas = soma((s) => s.rolhasPartidas);
     const fortes = soma((s) => s.fortes || 0), ligeiros = soma((s) => s.ligeiros || 0);
     // fase de hoje
@@ -783,7 +788,7 @@ async function ordensDeHoje(ms, contagens) {
     const resultado = resultadoOrdem({ encomenda, acumulado, continua, diaTerminado: fase === 'levantada' && !aguardaContadeira, aceiteFalta: !!row.aceite_falta });
     return {
       op, mesas: o.mesas, segmentos: segs, contadeira: cont, tipo: segs[0].tipo, dsrol: segs.some((s) => s.dsrol),
-      rolhas, rolhasPartidas: partidas, frascosPartidos: soma((s) => s.frascosPartidos), frascos: soma((s) => s.frascos),
+      abatidas, entradas, parcial, rolhas, rolhasPartidas: partidas, frascosPartidos: soma((s) => s.frascosPartidos), frascos: soma((s) => s.frascos),
       ligeiros, fortes, contaminados: ligeiros + fortes, aprovadasDia, fase, aguardaContadeira, contLigeiras: contagem && contagem.ligeiros !== undefined ? contagem.ligeiros : null, contSobras: contagem && contagem.sobras !== undefined && contagem.sobras !== null ? contagem.sobras : null, contSobrasRej: contagem && contagem.sobras_rej !== undefined && contagem.sobras_rej !== null ? contagem.sobras_rej : null, levantadaEm: hojeRow.levantada_em || null,
       encomenda, anteriores, rolhasAdicionais: row.rolhas_adicionais || 0, acumulado, continua, resultado,
       falta: encomenda !== null ? Math.max(0, encomenda - acumulado) : 0, aceiteFalta: !!row.aceite_falta, qvs,
@@ -810,9 +815,28 @@ app.post('/api/logistica/ordem/qvs', async (req, res) => {
     res.json({ ok: true, ordem: (await carregarOrdemHoje(o.op)).o });
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao registar as QVs.' }); }
 });
+// Rolhas a abater à ordem (frascos vazios ou com 1 rolha em ordens a 2 rolhas): quem levanta aponta o nº de ROLHAS, como as partidas
+async function gravarAbatidas(op, rolhas, req, res) {
+  const n = Number(rolhas);
+  if (!Number.isInteger(n) || n < 0) { res.status(400).json({ erro: 'Rolhas a abater: número inteiro (0 ou mais).' }); return false; }
+  const { o } = await carregarOrdemHoje(op);
+  if (!o) { res.status(404).json({ erro: 'Esta ordem não tem mesas hoje.' }); return false; }
+  if (o.fase === 'levantada' && !pinOk(req)) { res.status(409).json({ erro: 'A ordem já foi levantada. Só a supervisora altera as rolhas abatidas.' }); return false; }
+  if (o.ligeiros + o.fortes + o.rolhasPartidas + n > o.rolhas) { res.status(400).json({ erro: `Ligeiras + fortes + partidas + abatidas (${o.ligeiros + o.fortes + o.rolhasPartidas + n}) é mais do que as ${o.rolhas} rolhas da ordem.` }); return false; }
+  await pool.query(`INSERT INTO ordens_dia (data, op, rolhas_abatidas) VALUES ($1,$2,$3) ON CONFLICT (data, op) DO UPDATE SET rolhas_abatidas = EXCLUDED.rolhas_abatidas`, [plan.hojeLisboa(), o.op, n]);
+  return true;
+}
+app.post('/api/logistica/ordem/abater', async (req, res) => {
+  try {
+    if (!(await gravarAbatidas((req.body || {}).op, (req.body || {}).rolhas, req, res))) return;
+    const { o } = await carregarOrdemHoje((req.body || {}).op);
+    res.json({ ok: true, ordem: o });
+  } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao guardar as rolhas abatidas.' }); }
+});
 app.post('/api/logistica/ordem/levantar', async (req, res) => {
   try {
     const { op, desfazer } = req.body || {};
+    if (!desfazer && (req.body || {}).abatidas !== undefined && (req.body || {}).abatidas !== null && (req.body || {}).abatidas !== '') { if (!(await gravarAbatidas(op, req.body.abatidas, req, res))) return; }
     const { o } = await carregarOrdemHoje(op);
     if (!o) return res.status(404).json({ erro: 'Esta ordem não tem mesas hoje.' });
     const hoje = plan.hojeLisboa();
@@ -867,12 +891,12 @@ async function listaOrdensSupervisora() {
   const ms = lista.map((x) => formatarLote(x, contagens));
   const hojeOrds = new Map((await ordensDeHoje(ms, contagens)).map((o) => [o.op, o]));
   const cont = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, aprovadas, ligeiros, sobras, sobras_rej FROM contagens_op`)).rows;
-  const qv = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, qvs_logistica FROM ordens_dia`)).rows;
+  const qv = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, qvs_logistica, COALESCE(rolhas_abatidas, 0) AS abat FROM ordens_dia`)).rows;
   const agg = (await pool.query(`SELECT op, to_char(data, 'YYYY-MM-DD') AS d, BOOL_OR(contadeira) AS contadeira, SUM(frascos * rolhas_por_frasco)::int AS total,
       SUM(COALESCE(misu_fortes, 0))::int AS fortes, SUM(COALESCE(rolhas_partidas, frascos_partidos * rolhas_por_frasco))::int AS partidas FROM lote_ops GROUP BY op, data`)).rows;
   const valoresDe = (op) => agg.filter((a) => a.op === op).map((a) => {
     const c = cont.find((x) => x.op === op && x.d === a.d) || {}, q = qv.find((x) => x.op === op && x.d === a.d) || {};
-    return { data: a.d, contadeira: a.contadeira, total: a.total, fortes: a.fortes, partidas: a.partidas, aprovadas: c.aprovadas ?? null, ligeiras: c.ligeiros ?? null, sobras: c.sobras ?? null, sobrasRej: c.sobras_rej ?? null, qvs: q.qvs_logistica ?? 0 };
+    return { data: a.d, contadeira: a.contadeira, total: a.total, fortes: a.fortes, partidas: a.partidas, aprovadas: c.aprovadas ?? null, ligeiras: c.ligeiros ?? null, sobras: c.sobras ?? null, sobrasRej: c.sobras_rej ?? null, abatidas: q.abat ?? 0, qvs: q.qvs_logistica ?? 0 };
   }).sort((x, y) => (x.data < y.data ? 1 : -1));
   return ords.map((o) => {
     const dd = dias.filter((d) => d.op === o.op);
@@ -922,7 +946,7 @@ app.post('/api/supervisora/provadores-metricas', async (req, res) => {
               to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho,
               CASE WHEN hora_fecho IS NOT NULL THEN ROUND(EXTRACT(EPOCH FROM (hora_fecho - hora_abertura)) / 60.0, 1) END AS minutos
        FROM registos
-       WHERE hora_abertura >= (((now() AT TIME ZONE 'Europe/Lisbon')::date - ($1::int - 1))::timestamp AT TIME ZONE 'Europe/Lisbon')
+       WHERE simulado = false AND hora_abertura >= (((now() AT TIME ZONE 'Europe/Lisbon')::date - ($1::int - 1))::timestamp AT TIME ZONE 'Europe/Lisbon')
        ORDER BY hora_abertura DESC`, [dias]);
     const por = new Map();
     for (const x of r.rows) {
@@ -979,7 +1003,7 @@ app.post('/api/supervisora/fechar-provas', async (req, res) => {
         let add = 0;
         for (let i = 0; fechadas + add < n && i < livres.length; i++, add++) {
           await client.query(
-            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - interval '20 minutes', ${DIA0} + interval '1 minute'), GREATEST(now() - interval '10 minutes', ${DIA0} + interval '2 minutes'), 'Fechado', $3)`,
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem, simulado) VALUES ($1,$2, GREATEST(now() - interval '20 minutes', ${DIA0} + interval '1 minute'), GREATEST(now() - interval '10 minutes', ${DIA0} + interval '2 minutes'), 'Fechado', $3, true)`,
             [l.mesa, livres[i], l.ordem]);
           carga.set(livres[i], (carga.get(livres[i]) || 0) + 1);
         }
@@ -1003,6 +1027,11 @@ app.post('/api/supervisora/ordem-valores', async (req, res) => {
     if (!ag || ag.total === null) return res.status(404).json({ erro: 'Esta ordem não tem colocação nesse dia.' });
     const qv = inteiro(b.qvs);
     if (qv === undefined || invalido(qv)) return res.status(400).json({ erro: 'Indica as QVs (nº de rolhas, 0 ou mais).' });
+    const abtOld = ((await pool.query(`SELECT COALESCE(rolhas_abatidas, 0) AS a FROM ordens_dia WHERE data = $1 AND op = $2`, [data, op])).rows[0] || { a: 0 }).a;
+    const abt = b.abatidas === undefined || b.abatidas === null || b.abatidas === '' ? abtOld : inteiro(b.abatidas);
+    if (invalido(abt)) return res.status(400).json({ erro: 'Rolhas abatidas: número inteiro (0 ou mais).' });
+    if (abt !== abtOld) await pool.query(`INSERT INTO ordens_dia (data, op, rolhas_abatidas) VALUES ($1,$2,$3) ON CONFLICT (data, op) DO UPDATE SET rolhas_abatidas = EXCLUDED.rolhas_abatidas`, [data, op, abt]);
+    if (abt !== abtOld && !ag.contadeira) await pool.query(`UPDATE ordens_dia SET aprovadas_final = GREATEST(0, aprovadas_final + $3) WHERE data = $1 AND op = $2 AND levantada_em IS NOT NULL AND aprovadas_final IS NOT NULL`, [data, op, abtOld - abt]);
     if (!ag.contadeira) {
       await pool.query(`INSERT INTO ordens_dia (data, op, qvs_logistica) VALUES ($1,$2,$3) ON CONFLICT (data, op) DO UPDATE SET qvs_logistica = EXCLUDED.qvs_logistica`, [data, op, qv]);
     } else {
@@ -1011,8 +1040,8 @@ app.post('/api/supervisora/ordem-valores', async (req, res) => {
       if (sob >= 5000) return res.status(400).json({ erro: 'Sobras: menos de 5 000 rolhas (um saco completo tem 5 000).' });
       const sobRej = b.sobrasRej === undefined || b.sobrasRej === null || b.sobrasRej === '' ? null : inteiro(b.sobrasRej);
       if (sobRej !== null && (sobRej === undefined || invalido(sobRej))) return res.status(400).json({ erro: 'Sobras de rolhas rejeitadas: número inteiro, 0 ou mais.' });
-      const soma = apr + lig + ag.fortes + ag.partidas + sob;
-      if (soma !== ag.total) return res.status(400).json({ erro: `Não bate com a colocação: OK (${apr}) + rejeitadas (${lig}) + fortes do MISU (${ag.fortes}) + partidas (${ag.partidas}) + sobras (${sob}) = ${soma}, e a OP tem ${ag.total} rolhas.` });
+      const soma = apr + lig + ag.fortes + ag.partidas + abt + sob;
+      if (soma !== ag.total) return res.status(400).json({ erro: `Não bate com a colocação: OK (${apr}) + rejeitadas (${lig}) + fortes do MISU (${ag.fortes}) + partidas (${ag.partidas}) + abatidas (${abt}) + sobras (${sob}) = ${soma}, e a OP tem ${ag.total} rolhas.` });
       await pool.query(`INSERT INTO contagens_op (op, data, aprovadas, ligeiros, sobras, sobras_rej, em) VALUES ($1,$2,$3,$4,$5,$6,now()) ON CONFLICT (op, data) DO UPDATE SET aprovadas = $3, ligeiros = $4, sobras = $5, sobras_rej = $6, em = now()`, [op, data, apr, lig, sob, sobRej]);
       await pool.query(`INSERT INTO ordens_dia (data, op, qvs_logistica, aprovadas_final) VALUES ($1,$2,$3,$4) ON CONFLICT (data, op) DO UPDATE SET qvs_logistica = $3, aprovadas_final = CASE WHEN ordens_dia.levantada_em IS NOT NULL THEN $4 ELSE ordens_dia.aprovadas_final END`, [data, op, qv, apr]);
     }
@@ -1066,7 +1095,9 @@ app.get('/api/levantamento', async (req, res) => {
     const mesas = juntarConfere(lista.map((x) => formatarLote(x, contagens)), contagens);
     const ordens = await ordensDeHoje(mesas, contagens);
     const info = new Map(ordens.map((o) => [o.op, o]));
-    const ops = agregarOps(mesas, contagens).map((o) => ({ ...o, estado: (() => { const i = info.get(o.op); if (!i) return o.estado; if (i.fase === 'levantada') return i.aprovadasDia === null ? 'por_contar' : 'feito'; return i.fase === 'em_prova' ? 'aguardar_provas' : i.fase === 'misu' ? 'aguardar_misu' : 'aguardar_levantamento'; })(), ligeirasContadas: info.get(o.op)?.contLigeiras ?? null, sobras: info.get(o.op)?.contSobras ?? null, sobrasRej: info.get(o.op)?.contSobrasRej ?? null, dataProva: plan.hojeLisboa(), levantada: info.get(o.op)?.fase === 'levantada', qvsLog: info.get(o.op)?.qvs?.logistica ?? 0, qvsTotal: info.get(o.op)?.qvs?.total ?? 0, encomenda: info.get(o.op)?.encomenda ?? null, anteriores: info.get(o.op)?.anteriores ?? 0, acumulado: info.get(o.op)?.acumulado ?? 0, continua: info.get(o.op)?.continua ?? false, resultado: info.get(o.op)?.resultado ?? null, falta: info.get(o.op)?.falta ?? 0 }));
+    const ops = agregarOps(mesas, contagens).map((o) => ({ ...o, estado: (() => { const i = info.get(o.op); if (!i) return o.estado; if (i.fase === 'levantada') return i.aprovadasDia === null ? 'por_contar' : 'feito'; return i.fase === 'em_prova' ? 'aguardar_provas' : i.fase === 'misu' ? 'aguardar_misu' : 'aguardar_levantamento'; })(), ligeirasContadas: info.get(o.op)?.contLigeiras ?? null, sobras: info.get(o.op)?.contSobras ?? null, sobrasRej: info.get(o.op)?.contSobrasRej ?? null, dataProva: plan.hojeLisboa(), levantada: info.get(o.op)?.fase === 'levantada', qvsLog: info.get(o.op)?.qvs?.logistica ?? 0, qvsTotal: info.get(o.op)?.qvs?.total ?? 0, encomenda: info.get(o.op)?.encomenda ?? null, anteriores: info.get(o.op)?.anteriores ?? 0, acumulado: info.get(o.op)?.acumulado ?? 0, continua: info.get(o.op)?.continua ?? false, resultado: info.get(o.op)?.resultado ?? null, falta: info.get(o.op)?.falta ?? 0,
+      entradas: info.get(o.op)?.entradas ?? [], parcial: info.get(o.op)?.parcial ?? null, abatidas: info.get(o.op)?.abatidas ?? 0,
+      podeContar: (o.entregues || 0) > 0 && !(info.get(o.op)?.fase === 'levantada' && info.get(o.op)?.aprovadasDia !== null) }));
     res.json({ data: plan.hojeLisboa(), mesas, ops, ordens });
   } catch (err) { console.error(err); res.status(500).json({ erro: 'Erro ao obter o levantamento.' }); }
 });
@@ -1151,7 +1182,36 @@ app.post('/api/contadeira/op/:op', async (req, res) => {
     const lista = todas.filter((x) => ag.mesas.includes(x.l.mesa));
     const nova = (await pool.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2 LIMIT 1`, [plan.hojeLisboa(), op])).rows.length > 0;
     if (nova) {
-      // colocação por ordem: levanta-se primeiro (logística) e só depois a contadeira conta
+      const hojeD = plan.hojeLisboa();
+      const jaContada = !!(contagens0.get(op) && contagens0.get(op).aprovadas !== null && contagens0.get(op).aprovadas !== undefined);
+      const abat = ((await pool.query(`SELECT COALESCE(rolhas_abatidas, 0) AS a FROM ordens_dia WHERE data = $1 AND op = $2`, [hojeD, op])).rows[0] || { a: 0 }).a;
+      const B = req.body || {};
+      // apagar uma contagem lançada por engano: só a supervisora
+      if (B.apagarEntrada !== undefined) {
+        if (!pinOk(req)) return res.status(403).json({ erro: 'Palavra-passe da supervisora incorreta. Só a supervisora apaga uma contagem lançada.' });
+        await pool.query(`DELETE FROM contagens_entradas WHERE id = $1 AND op = $2 AND data = $3`, [Number(B.apagarEntrada), op, hojeD]);
+        return res.json({ ok: true });
+      }
+      // contagens ao longo do dia (sacos de 5 000, ou menos): vão-se somando; o fecho da OP faz-se no fim
+      if (B.entrada) {
+        if (jaContada && !pinOk(req)) return res.status(409).json({ erro: 'A contagem desta OP já está fechada. Só a supervisora pode alterar.' });
+        if (!lista.some((x) => derivar(x.l).misuEstado !== 'pendente')) return res.status(409).json({ erro: 'A contadeira só conta depois de o MISU entregar pelo menos uma mesa desta OP.' });
+        const E = B.entrada, g = (v) => (v === undefined || v === null || v === '' ? 0 : Number(v));
+        const v = { aprovadas: g(E.aprovadas), ligeiros: g(E.ligeiras), qvs: g(E.qvs), sobras: g(E.sobras), sobras_rej: g(E.sobrasRej) };
+        if (Object.values(v).some((x) => !Number.isInteger(x) || x < 0)) return res.status(400).json({ erro: 'Os valores da contagem têm de ser números inteiros (0 ou mais).' });
+        if (Object.values(v).every((x) => x === 0)) return res.status(400).json({ erro: 'Indica pelo menos um valor contado.' });
+        if (v.sobras >= 5000) return res.status(400).json({ erro: 'Sobras: um saco completo tem 5 000 rolhas, por isso as sobras têm de ser menos de 5 000.' });
+        const t = (await pool.query(`SELECT COALESCE(SUM(aprovadas + ligeiros + sobras), 0)::int AS s FROM contagens_entradas WHERE op = $1 AND data = $2`, [op, hojeD])).rows[0].s;
+        if (t + v.aprovadas + v.ligeiros + v.sobras + ag.fortes + ag.rolhasPartidas + abat > ag.totalRolhas) return res.status(400).json({ erro: `Com esta contagem o total passa as ${ag.totalRolhas} rolhas da OP (já contado ${t}, fortes ${ag.fortes}, partidas ${ag.rolhasPartidas}, abatidas ${abat}).` });
+        await pool.query(`INSERT INTO contagens_entradas (op, data, aprovadas, ligeiros, qvs, sobras, sobras_rej) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [op, hojeD, v.aprovadas, v.ligeiros, v.qvs, v.sobras, v.sobras_rej]);
+        return res.json({ ok: true });
+      }
+      if (B.fechar) {   // fecho da OP: usa a soma das contagens do dia
+        const s0 = (await pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(aprovadas),0)::int AS a, COALESCE(SUM(ligeiros),0)::int AS l, COALESCE(SUM(qvs),0)::int AS q, COALESCE(SUM(sobras),0)::int AS s, COALESCE(SUM(sobras_rej),0)::int AS r FROM contagens_entradas WHERE op = $1 AND data = $2`, [op, hojeD])).rows[0];
+        if (!s0.n) return res.status(400).json({ erro: 'Ainda não há contagens lançadas para esta OP.' });
+        req.body = { aprovadas: s0.a, ligeiras: s0.l, qvs: s0.q, sobras: s0.s, sobrasRej: s0.r, pin: B.pin };
+      }
+      // colocação por ordem: levanta-se primeiro (logística) e só depois a contadeira fecha a OP
       const ld = (await pool.query(`SELECT levantada_em FROM ordens_dia WHERE data = $1 AND op = $2`, [plan.hojeLisboa(), op])).rows[0];
       if (!ld || !ld.levantada_em) return res.status(409).json({ erro: 'A ordem ainda não foi levantada pela logística. A contadeira conta depois do levantamento.' });
       if (contagens0.get(op) && contagens0.get(op).aprovadas !== null && contagens0.get(op).aprovadas !== undefined && !pinOk(req)) return res.status(409).json({ erro: 'A contagem desta OP já está registada. Só a supervisora pode alterar.' });
@@ -1163,8 +1223,8 @@ app.post('/api/contadeira/op/:op', async (req, res) => {
       if (lig2 === undefined || invalido(lig2)) return res.status(400).json({ erro: 'Indica as rolhas rejeitadas contadas pela máquina (número inteiro, 0 ou mais).' });
       const sobRej2 = req.body.sobrasRej === undefined || req.body.sobrasRej === '' ? null : inteiro(req.body.sobrasRej);
       if (sobRej2 !== null && (sobRej2 === undefined || invalido(sobRej2))) return res.status(400).json({ erro: 'Sobras de rolhas rejeitadas: número inteiro, 0 ou mais.' });
-      const soma = apr2 + lig2 + ag.fortes + ag.rolhasPartidas + sob2;   // as sobras fecham o dia, mas não entram no acumulado
-      if (soma !== ag.totalRolhas) return res.status(400).json({ erro: `Não bate com a colocação: OK (${apr2}) + rejeitadas (${lig2}) + fortes do MISU (${ag.fortes}) + partidas (${ag.rolhasPartidas}) + sobras (${sob2}) = ${soma}, e a OP tem ${ag.totalRolhas} rolhas.` });
+      const soma = apr2 + lig2 + ag.fortes + ag.rolhasPartidas + abat + sob2;   // as sobras fecham o dia, mas não entram no acumulado
+      if (soma !== ag.totalRolhas) return res.status(400).json({ erro: `Não bate com a colocação: OK (${apr2}) + rejeitadas (${lig2}) + fortes do MISU (${ag.fortes}) + partidas (${ag.rolhasPartidas}) + abatidas (${abat}) + sobras (${sob2}) = ${soma}, e a OP tem ${ag.totalRolhas} rolhas.` });
       await pool.query(`INSERT INTO contagens_op (op, data, aprovadas, ligeiros, sobras, sobras_rej, em) VALUES ($1,$2,$3,$4,$5,$6,now()) ON CONFLICT (op, data) DO UPDATE SET aprovadas = $3, ligeiros = $4, sobras = $5, sobras_rej = $6, em = now()`, [op, plan.hojeLisboa(), apr2, lig2, sob2, sobRej2]);
       await pool.query(`UPDATE ordens_dia SET aprovadas_final = $3, qvs_logistica = $4 WHERE data = $1 AND op = $2`, [plan.hojeLisboa(), op, apr2, qv2]);
       return res.json({ ok: true });
@@ -1254,7 +1314,7 @@ app.post('/api/supervisora/registos', async (req, res) => {
     const mesa = String((req.body || {}).mesa || '').toUpperCase();
     if (!/^[AB]\d{1,2}$/.test(mesa)) return res.status(400).json({ erro: 'Mesa inválida.' });
     const r = await pool.query(
-      `SELECT id, aprovador, hora_abertura, hora_fecho, estado,
+      `SELECT id, aprovador, hora_abertura, hora_fecho, estado, simulado,
               to_char(hora_abertura AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS abertura, to_char(hora_fecho AT TIME ZONE 'Europe/Lisbon', 'HH24:MI') AS fecho
        FROM registos WHERE mesa = $1 AND hora_abertura >= (((now() AT TIME ZONE 'Europe/Lisbon')::date - 1)::timestamp AT TIME ZONE 'Europe/Lisbon') ORDER BY id`, [mesa]);
     const hoje = plan.hojeLisboa();
@@ -1417,7 +1477,7 @@ async function semearOrdensTeste({ provas, data: dataFixa } = {}) {
         if (ja.rowCount) continue;
         for (let k = 0; k < l.numero_provadores && k < nomes.length; k++) {
           await client.query(
-            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem) VALUES ($1,$2, GREATEST(now() - ($3 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '1 minute'), GREATEST(now() - ($4 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '2 minutes'), 'Fechado', NULL)`,
+            `INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado, ordem, simulado) VALUES ($1,$2, GREATEST(now() - ($3 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '1 minute'), GREATEST(now() - ($4 || ' minutes')::interval, ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') + interval '2 minutes'), 'Fechado', NULL, true)`,
             [l.mesa, nomes[(Number(l.mesa.slice(1)) + k) % nomes.length], String(200 - k * 40), String(190 - k * 40)]);
         }
       }

@@ -673,11 +673,13 @@ function linhasRolhas(m) {
 }
 
 function cartaoOp(o) {
-  const ativo = o.estado === 'por_contar' || o.estado === 'feito';
+  const ativo = o.estado === 'por_contar' || o.estado === 'feito' || !!o.podeContar;
   const rot = { aguardar_provas: `A aguardar provas ${o.prontas}/${o.nMesas} mesas`, aguardar_misu: `A aguardar MISU ${o.entregues}/${o.nMesas} mesas`, aguardar_levantamento: 'A aguardar levantamento', por_contar: 'Por contar', feito: 'Feito' }[o.estado];
+  const emContagem = o.podeContar && o.estado !== 'por_contar' && o.estado !== 'feito';
   const cl = { aguardar_provas: 'aguardar', aguardar_misu: 'aguardar', aguardar_levantamento: 'aguardar', por_contar: 'fazer', feito: 'feito' }[o.estado];
-  return `<div class="cartao-lev${ativo ? '' : ' desativada'}${o.estado === 'por_contar' ? ' pendente' : ''}" data-op="${o.op}">
-    <div class="topo">OP ${o.op}<span class="estado ${cl}">${rot}</span></div>
+  const rotF = emContagem ? `Em contagem${o.parcial && o.parcial.aprovadas ? ' · ' + fmt(o.parcial.aprovadas) + ' OK' : ''}` : rot;
+  return `<div class="cartao-lev${ativo ? '' : ' desativada'}${o.estado === 'por_contar' || emContagem ? ' pendente' : ''}" data-op="${o.op}">
+    <div class="topo">OP ${o.op}<span class="estado ${emContagem ? 'fazer' : cl}">${rotF}</span></div>
     <div class="meta">Cliente: <b>${esc(o.tipo || '-')}</b> · ${o.continua ? '<b>1.º fecho</b> (continua amanhã) · ' : ''}Mesas: ${o.mesas.join(', ')} · ${fmt(o.totalRolhas)} rolhas${o.partilhada ? ' (inclui mesas partilhadas)' : ''}<br/>Frascos partidos ${fmt(o.frascosPartidos)} (${fmt(o.rolhasPartidas)} rolhas)</div>
   </div>`;
 }
@@ -820,11 +822,12 @@ function folhaOrdem(op) {
     <div class="bloco-rolhas">${linhasSeg}<br/>
       Total da ordem: <b>${fmt(o.rolhas)}</b> rolhas · ${o.tipo}${o.contadeira ? ' · vai à contadeira' : ' · sem contadeira'}${o.continua ? ' · continua amanhã' : ''}</div>
     ${fase ? `<div class="aviso-hand">${fase}</div>` : ''}
-    ${bloqAprov ? `<div class="bloco-rolhas">Aprovadas hoje: <b>${fmt(apr)}</b> (total − ligeiras − fortes − partidas)<br/>
+    ${bloqAprov ? `<div class="bloco-rolhas">Aprovadas hoje: <b id="ordSomaAprov">${fmt(apr)}</b> (total − ligeiras − fortes − partidas${o.abatidas ? ' − abatidas' : ''})<br/>
       Encomenda <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}${o.rolhasAdicionais ? ' · acrescentadas ' + fmt(o.rolhasAdicionais) : ''} · hoje ${fmt(apr)} = <b>${fmt(o.acumulado)}</b><br/>
       ${o.continua ? '<b>1.º fecho</b> · a ordem continua amanhã' : (o.acumulado >= o.encomenda ? '<b>OK</b> · encomenda cumprida' : `<b>Faltam ${fmt(o.falta)} rolhas</b> · fica pendente para a supervisão`)}</div>` : ''}
     ${o.contadeira && pode && !lev ? '<div class="aviso-hand">Esta ordem vai à contadeira: levanta-se primeiro; a contadeira conta depois e é lá que se apontam as QVs.</div>' : ''}
     ${lev ? `<div class="bloco-rolhas"><b>${textoResultado(o)}</b><br/>QVs: colocação ${fmt(q.colocacao)} + MISU ${fmt(q.misu)} + logística ${fmt(q.logistica)} = ${fmt(q.total)} rolhas<br/>${o.contSobras ? `Sobras (contadeira): ${fmt(o.contSobras)} rolhas · não entram no acumulado<br/>` : ''}Levantamento registado: só a supervisora pode alterar.</div>` : ''}
+    ${o.fase === 'pronta' ? `${campoNum('ordAbat', 'Rolhas a abater (frascos vazios ou com 1 rolha) · nº de ROLHAS', o.abatidas || '')}<div class="dica" style="margin:-4px 0 10px;">Como as partidas, mas em rolhas: ex. um frasco vazio numa ordem a 2 rolhas abate 2; um frasco com 1 rolha abate 1. Deixa em branco se não houver.</div>` : (lev && o.abatidas ? `<div class="bloco-rolhas">Rolhas abatidas: <b>${fmt(o.abatidas)}</b></div>` : '')}
     ${o.fase === 'pronta' && !o.contadeira ? `${campoNum('ordQvs', 'QVs · qualidade visual (nº de rolhas, pode ser 0)', '')}<div class="soma-qv" id="ordSoma"></div>
       <button class="primario" id="ordLev" style="margin-top:10px;">Guardar QVs e levantar ordem</button>` : ''}
     ${o.fase === 'pronta' && o.contadeira ? '<button class="primario" id="ordLev" style="margin-top:10px;">Levantar ordem</button>' : ''}
@@ -836,12 +839,13 @@ function folhaOrdem(op) {
     el('ordSoma').textContent = `QVs: colocação ${fmt(q.colocacao)} + logística ${fmt(l)} = ${fmt(q.colocacao + l)} rolhas`;
   };
   if (el('ordQvs')) { el('ordQvs').oninput = somar; somar(); }
+  if (el('ordAbat')) el('ordAbat').oninput = () => { const x = el('ordSomaAprov'); if (x && apr !== null) x.textContent = fmt(Math.max(0, apr + (o.abatidas || 0) - (lerNum('ordAbat') || 0))); };
   el('ordX').onclick = fecharFolha;
   if (el('ordLev')) el('ordLev').onclick = async () => {
     el('ordErro').textContent = '';
     if (el('ordQvs') && lerNum('ordQvs') === undefined) { el('ordErro').textContent = 'Indica as QVs (escreve 0 se não houver).'; return; }
     try {
-      await enviar('/api/logistica/ordem/levantar', { op: o.op, ...(el('ordQvs') ? { qvs: lerNum('ordQvs') } : {}) });
+      await enviar('/api/logistica/ordem/levantar', { op: o.op, ...(el('ordQvs') ? { qvs: lerNum('ordQvs') } : {}), ...(el('ordAbat') && lerNum('ordAbat') !== undefined ? { abatidas: lerNum('ordAbat') } : {}) });
       fecharFolha(); await renderOrdensLev(); carregarLogistica();
     } catch (e) { el('ordErro').textContent = e.message; }
   };
@@ -876,16 +880,16 @@ async function folhaOrdensSup(lista) {
     const v = o.valores.find((x) => x.data === dia);
     const nv = (id, r, val) => `<div class="sheet-campo"><label>${r}</label><input type="number" inputmode="numeric" min="0" id="${id}_${op}" value="${val ?? ''}" /></div>`;
     el('ovCampos_' + op).innerHTML = v.contadeira
-      ? nv('ovApr', 'Rolhas OK', v.aprovadas) + nv('ovLig', 'Rolhas rejeitadas', v.ligeiras) + nv('ovQv', 'QVs (rolhas)', v.qvs) + nv('ovSob', 'Sobras (OK)', v.sobras) + nv('ovSobRej', 'Sobras de rolhas rejeitadas', v.sobrasRej)
-        + `<div class="dica" style="grid-column:1/-1;">Total da OP ${fmt(v.total)} = OK + rejeitadas + fortes (${fmt(v.fortes)}) + partidas (${fmt(v.partidas)}) + sobras (OK). As sobras de rejeitadas são só informação.</div>`
-      : nv('ovQv', 'QVs da logística (rolhas)', v.qvs) + '<div class="dica" style="grid-column:1/-1;">Sem contadeira: as aprovadas calculam-se pelo MISU e pelas partidas (edita em Colocação e levantamento).</div>';
+      ? nv('ovApr', 'Rolhas OK', v.aprovadas) + nv('ovLig', 'Rolhas rejeitadas', v.ligeiras) + nv('ovQv', 'QVs (rolhas)', v.qvs) + nv('ovSob', 'Sobras (OK)', v.sobras) + nv('ovSobRej', 'Sobras de rolhas rejeitadas', v.sobrasRej) + nv('ovAbat', 'Rolhas abatidas (vazios / 1 rolha)', v.abatidas)
+        + `<div class="dica" style="grid-column:1/-1;">Total da OP ${fmt(v.total)} = OK + rejeitadas + fortes (${fmt(v.fortes)}) + partidas (${fmt(v.partidas)}) + abatidas + sobras (OK). As sobras de rejeitadas são só informação.</div>`
+      : nv('ovQv', 'QVs da logística (rolhas)', v.qvs) + nv('ovAbat', 'Rolhas abatidas (vazios / 1 rolha)', v.abatidas) + '<div class="dica" style="grid-column:1/-1;">Sem contadeira: as aprovadas calculam-se pelo MISU e pelas partidas (edita em Colocação e levantamento).</div>';
   };
   el('sheetBox').querySelectorAll('.ovDia').forEach((sel) => { campos(sel.dataset.op); sel.onchange = () => campos(sel.dataset.op); });
   el('sheetBox').querySelectorAll('button[data-vg]').forEach((b) => {
     b.onclick = async () => {
       const op = b.dataset.vg, dia = el('sheetBox').querySelector(`.ovDia[data-op="${op}"]`).value, v = ord.find((x) => x.op === op).valores.find((x) => x.data === dia);
       const g = (id) => { const e = document.getElementById(id + '_' + op); return e && e.value.trim() !== '' ? Number(e.value) : undefined; };
-      const corpo = { pin: pinSessao, op, data: dia, qvs: g('ovQv') };
+      const corpo = { pin: pinSessao, op, data: dia, qvs: g('ovQv'), abatidas: g('ovAbat') };
       if (v.contadeira) Object.assign(corpo, { aprovadas: g('ovApr'), ligeiras: g('ovLig'), sobras: g('ovSob'), sobrasRej: g('ovSobRej') });
       try { const r = await enviar('/api/supervisora/ordem-valores', corpo); carregarLogistica(); alert('Valores guardados.'); folhaOrdensSup(r.ordens); }
       catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('osErro').textContent = e.message; }
@@ -1003,36 +1007,70 @@ function fmtData(d) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || ''); return
 // ----- Contadeira (trabalha à OP) -----
 function folhaContadeira(o) {
   const feito = o.aprovadas !== null && o.aprovadas !== undefined;
-  abrirFolha(`<h3>Contadeira · OP ${o.op}</h3>
+  const p = o.parcial || { aprovadas: 0, ligeiras: 0, qvs: 0, sobras: 0, sobrasRej: 0 };
+  const cab = `<h3>Contadeira · OP ${o.op}</h3>
     <div class="tipo-cli">Tipo de cliente: <b>${esc(o.tipo || '-')}</b></div>
     <div class="tipo-cli" style="margin-left:6px;">Data de contar (= prova): <b>${esc(fmtData(o.dataProva))}</b></div>
     <div class="bloco-rolhas">Mesas da OP: <b>${o.mesas.join(', ')}</b><br/>
       Total de rolhas: <b>${fmt(o.totalRolhas)}</b><br/>
-      Aromas fortes (MISU): <b>${fmt(o.fortes)}</b> rolhas · Partidas: <b>${fmt(o.rolhasPartidas)}</b> rolhas (${fmt(o.frascosPartidos)} frascos)
+      Aromas fortes (MISU): <b>${fmt(o.fortes)}</b> rolhas · Partidas: <b>${fmt(o.rolhasPartidas)}</b> rolhas (${fmt(o.frascosPartidos)} frascos)${o.abatidas ? `<br/>Abatidas na logística (vazios / 1 rolha): <b>${fmt(o.abatidas)}</b> rolhas` : ''}
       ${o.encomenda ? `<br/>Encomenda: <b>${fmt(o.encomenda)}</b> · dias anteriores ${fmt(o.anteriores)}` : ''}
-      ${o.continua ? '<br/><b>1.º fecho</b> · a ordem continua amanhã (não é o fecho final)' : ''}</div>
-    ${feito ? '<div class="aviso-hand">Contagem registada. Só a supervisora pode alterar.</div>' : '<p class="intro" style="margin-top:0;">Valores contados pela máquina para a OP (nº de rolhas)</p>'}
-    ${campoNum('contApr', 'Rolhas OK (aprovadas)', o.aprovadas, feito)}
-    ${campoNum('contLig', 'Rolhas rejeitadas', o.ligeirasContadas, feito)}
-    ${campoNum('contQvs', 'QVs · qualidade visual (nº de rolhas)', feito ? o.qvsLog : '', feito)}
-    ${campoNum('contSob', 'Sobras · rolhas OK num saco de 5 000 incompleto', feito ? o.sobras : '', feito)}
-    ${campoNum('contSobRej', 'Sobras de rolhas rejeitadas', feito ? o.sobrasRej : '', feito)}
-    <div class="dica" style="margin:-4px 0 10px;">As sobras são rolhas OK que ficam num saco incompleto: não entram no acumulado de hoje, amanhã juntam-se num saco de 5 000. Só informação: Total OK + sobras = <b id="contTotOk">${feito ? fmt((o.aprovadas || 0) + (o.sobras || 0)) : '0'}</b>. As sobras de rejeitadas também são só informação. Escreve 0 se não houver.</div>
-    ${feito ? '' : '<button class="primario" id="contOk">Guardar</button>'}
+      ${o.continua ? '<br/><b>1.º fecho</b> · a ordem continua amanhã (não é o fecho final)' : ''}</div>`;
+  if (feito) {
+    abrirFolha(`${cab}<div class="aviso-hand">Contagem fechada. Só a supervisora pode alterar.</div>
+      ${campoNum('contApr', 'Rolhas OK (aprovadas)', o.aprovadas, true)}
+      ${campoNum('contLig', 'Rolhas rejeitadas', o.ligeirasContadas, true)}
+      ${campoNum('contQvs', 'QVs · qualidade visual (nº de rolhas)', o.qvsLog, true)}
+      ${campoNum('contSob', 'Sobras · rolhas OK num saco de 5 000 incompleto', o.sobras, true)}
+      ${campoNum('contSobRej', 'Sobras de rolhas rejeitadas', o.sobrasRej, true)}
+      <div class="dica">Total OK + sobras = <b>${fmt((o.aprovadas || 0) + (o.sobras || 0))}</b></div>
+      <button class="secundario" id="contX">Fechar</button>`);
+    el('contX').onclick = fecharFolha;
+    return;
+  }
+  const ent = o.entradas || [];
+  const contado = p.aprovadas + p.ligeiras + p.sobras;
+  const porContar = o.totalRolhas - o.fortes - o.rolhasPartidas - (o.abatidas || 0) - contado;
+  abrirFolha(`${cab}
+    <p class="intro" style="margin:8px 0;">A contadeira lança as contagens ao longo do dia (cada saco ou lote contado). No fim, fecha a OP.</p>
+    ${ent.length ? `<div class="bloco-rolhas"><b>Contagens de hoje</b><br/>${ent.map((e, i) => `${i + 1}. ${e.hora} · OK ${fmt(e.aprovadas)} · rejeitadas ${fmt(e.ligeiros)} · QVs ${fmt(e.qvs)} · sobras ${fmt(e.sobras)} · sobras rej. ${fmt(e.sobras_rej)} <a href="#" data-ap="${e.id}" style="color:#b3261e;">apagar</a>`).join('<br/>')}
+      <hr style="border:0;border-top:1px solid #d6dbd8;margin:6px 0;"/>
+      <b>Total:</b> OK ${fmt(p.aprovadas)} · rejeitadas ${fmt(p.ligeiras)} · QVs ${fmt(p.qvs)} · sobras ${fmt(p.sobras)} · sobras rej. ${fmt(p.sobrasRej)}<br/>
+      Ainda por contar: <b>${fmt(porContar)}</b> rolhas</div>` : '<div class="aviso-hand">Ainda não há contagens lançadas hoje.</div>'}
+    <div class="prop-linha"><b>Nova contagem</b>
+      ${campoNum('contApr', 'Rolhas OK (aprovadas)', '')}
+      ${campoNum('contLig', 'Rolhas rejeitadas', '')}
+      ${campoNum('contQvs', 'QVs · qualidade visual (nº de rolhas)', '')}
+      ${campoNum('contSob', 'Sobras · rolhas OK num saco de 5 000 incompleto', '')}
+      ${campoNum('contSobRej', 'Sobras de rolhas rejeitadas', '')}
+      <div class="dica">As sobras são rolhas OK num saco incompleto: não entram no acumulado de hoje e juntam-se amanhã num saco de 5 000. Só informação: OK + sobras. Deixa em branco o que não contaste.</div>
+      <button class="primario" id="contAdd">Adicionar contagem</button></div>
+    ${o.levantada ? `<button class="secundario" id="contFechar">Fechar a contagem da OP (${fmt(contado)} de ${fmt(o.totalRolhas - o.fortes - o.rolhasPartidas - (o.abatidas || 0))} rolhas)</button>`
+      : '<div class="dica">O fecho da OP faz-se depois de a logística levantar a ordem.</div>'}
     <button class="secundario" id="contX">Fechar</button>
     <div class="msg-erro" id="contErro"></div>`);
   el('contX').onclick = fecharFolha;
-  if (feito) return;
-  const somaOk = () => { el('contTotOk').textContent = fmt((lerNum('contApr') || 0) + (lerNum('contSob') || 0)); };
-  el('contApr').addEventListener('input', somaOk); el('contSob').addEventListener('input', somaOk);
-  el('contOk').onclick = async () => {
+  const refrescar = async () => { await carregarLevantamento(); const n = levOps.find((x) => x.op === o.op); if (n) folhaContadeira(n); abrirPerfil(); };
+  el('contAdd').onclick = async () => {
     el('contErro').textContent = '';
-    if (lerNum('contApr') === undefined || lerNum('contLig') === undefined || lerNum('contQvs') === undefined || lerNum('contSob') === undefined) { el('contErro').textContent = 'Indica as rolhas OK, as rejeitadas, as QVs e as sobras (0 se não houver).'; return; }
-    try {
-      await enviar('/api/contadeira/op/' + o.op, { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig'), qvs: lerNum('contQvs'), sobras: lerNum('contSob'), sobrasRej: lerNum('contSobRej') });
-      fecharFolha(); abrirPerfil();
-    } catch (e) { el('contErro').textContent = e.message; }
+    const entrada = { aprovadas: lerNum('contApr'), ligeiras: lerNum('contLig'), qvs: lerNum('contQvs'), sobras: lerNum('contSob'), sobrasRej: lerNum('contSobRej') };
+    try { await enviar('/api/contadeira/op/' + o.op, { entrada }); await refrescar(); }
+    catch (e) { el('contErro').textContent = e.message; }
   };
+  if (el('contFechar')) el('contFechar').onclick = async () => {
+    el('contErro').textContent = '';
+    if (!confirm('Fechar a contagem desta OP? Depois só a supervisora altera.')) return;
+    try { await enviar('/api/contadeira/op/' + o.op, { fechar: true }); fecharFolha(); abrirPerfil(); }
+    catch (e) { el('contErro').textContent = e.message; }
+  };
+  el('sheetBox').querySelectorAll('a[data-ap]').forEach((a) => {
+    a.onclick = async (ev) => {
+      ev.preventDefault();
+      if (!pinSessao && !(await pedirPin())) return;
+      try { await enviar('/api/contadeira/op/' + o.op, { apagarEntrada: Number(a.dataset.ap), pin: pinSessao }); await refrescar(); }
+      catch (e) { if (/palavra-passe/i.test(e.message)) pinSessao = null; el('contErro').textContent = e.message; }
+    };
+  });
 }
 
 // ----- Logística: rolhas aprovadas (levantar) -----
@@ -1241,7 +1279,7 @@ async function folhaProvasMesa(codigo) {
       <button class="secundario" id="rgNOk">Guardar nº de provadores</button></div>` : ''}
     ${regs.length ? regs.map((r) => {
       const lst = nomes.includes(r.aprovador) ? nomes : [r.aprovador, ...nomes];
-      return `<details class="prop-linha"${regs.length <= 2 ? ' open' : ''}><summary>${esc(r.aprovador)} · ${r.estado} · ${r.abertura || ''}${r.fecho ? '–' + r.fecho : ''}</summary>
+      return `<details class="prop-linha"${regs.length <= 2 ? ' open' : ''}><summary>${esc(r.aprovador)}${r.simulado ? ' (fecho em lote, não é prova real)' : ''} · ${r.estado} · ${r.abertura || ''}${r.fecho ? '–' + r.fecho : ''}</summary>
         <div class="grid2">
         ${optSel('rgAp' + r.id, 'Provador', lst.map((n) => [n, n]), r.aprovador)}
         ${optSel('rgEs' + r.id, 'Estado', [['Aberto', 'Aberto'], ['Fechado', 'Fechado']], r.estado)}

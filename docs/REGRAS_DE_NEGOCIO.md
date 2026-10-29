@@ -94,3 +94,15 @@ Menu: Provadores (nomes) · Provadores (métricas e CSV) · Provas de uma mesa �
 ## 3.3 Mesas de dias anteriores por levantar
 
 Uma mesa colocada em dia anterior (últimos 7 dias) que **ainda não foi levantada** passa **sozinha para hoje** na primeira utilização da app, com as suas ordens (a ordem tem de continuar). Mantém o lado (A/B), aparece no mapa com a data de origem («de dd/mm») e as provas já feitas nos dias anteriores **continuam a contar**. Mesas já levantadas ou contadas não voltam.
+
+## 3.4 Contadeira ao longo do dia
+
+A contadeira **não espera** pelo fim: assim que o MISU entrega pelo menos uma mesa da OP, pode **lançar contagens** (cada saco/lote: OK, rejeitadas, QVs, sobras, sobras de rejeitadas). As contagens somam-se e aparecem na lista «Contagens de hoje» com o que falta contar. O **fecho da OP** («Fechar a contagem da OP») só se faz depois de a logística levantar a ordem e só se a conta bater: OK + rejeitadas + fortes + partidas + abatidas + sobras = total de rolhas. Depois de fechada, só a supervisão altera; só a supervisão apaga uma contagem lançada por engano.
+
+## 3.5 Rolhas abatidas (frascos vazios ou com 1 rolha)
+
+Em Levantar → Ordens · logística, quem levanta pode indicar as **rolhas a abater** (nº de ROLHAS, como as partidas). Abate ao total: sem contadeira, aprovadas = rolhas − ligeiras − fortes − partidas − abatidas; com contadeira entra na conta de fecho. A supervisão pode corrigir em Ordens → Valores do dia.
+
+## 3.6 Provas reais vs. fecho em lote
+
+As provas criadas pela supervisão em «Fechar provas em lote» fecham a mesa mas são marcadas como **simuladas**: **não entram** nas métricas nem nos contadores dos provadores (só entra o que aconteceu de facto no gemba).

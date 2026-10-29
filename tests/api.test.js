@@ -1054,6 +1054,40 @@ test('provador vê que o lote é DSROL', async () => {
   assert.deepStrictEqual(e.dsrolOps, ['15102810']);
 });
 
+test('fechar provas em lote não entra nas métricas dos provadores (só provas reais)', async () => {
+  const hoje = plan.hojeLisboa(), L = await require('../logic').ladoHoje();
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 0, rolhasPorFrasco: 2, contadeira: false, ordem: '15102820', frascos: 10 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/supervisora/fechar-provas', { pin: '8126', lado: L, de: 1, ate: 1 })).status, 200);
+  assert.ok((await pool.query(`SELECT 1 FROM registos WHERE mesa = $1 AND simulado = true`, [L + '1'])).rowCount >= 2);   // fecham a mesa
+  const m = (await api('POST', '/api/supervisora/provadores-metricas', { pin: '8126', dias: 1 })).body;
+  assert.strictEqual(m.resumo.provas, 0);                                                                     // mas não contam como provas reais
+  assert.strictEqual(m.provadores.length, 0);
+});
+
+test('contadeira lança contagens ao longo do dia e fecha no fim; abatidas entram na conta', async () => {
+  const hoje = plan.hojeLisboa(), L = await require('../logic').ladoHoje(), op = '15102830', m = L + '1';
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/confirmar', { data: hoje, pin: '8126', tipo: 'EUR', dsrol: false, continua: false, encomenda: 0, rolhasPorFrasco: 2, contadeira: true, ordem: op, frascos: 100 })).status, 200);   // 200 rolhas
+  const C = (x) => api('POST', '/api/contadeira/op/' + op, x);
+  assert.strictEqual((await C({ entrada: { aprovadas: 10 } })).status, 409);               // MISU ainda não entregou
+  await fechadoHa(m, 'Marta Santos', 60); await fechadoHa(m, 'Tânia Gonçalves', 40);
+  assert.strictEqual((await api('POST', '/api/misu/' + m, { ordens: { [op]: { fortes: 4 } } })).status, 200);
+  assert.strictEqual((await C({ entrada: { aprovadas: 100, ligeiras: 2, qvs: 1 } })).status, 200);   // 1.ª contagem do dia
+  assert.strictEqual((await C({ entrada: { aprovadas: 60, sobras: 3, sobrasRej: 1 } })).status, 200);
+  assert.strictEqual((await C({ entrada: { aprovadas: 500 } })).status, 400);              // passa o total
+  assert.strictEqual((await C({ fechar: true })).status, 409);                             // ainda não levantada
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/abater', { op, rolhas: 5000 })).status, 400);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/abater', { op, rolhas: 2 })).status, 200);
+  assert.strictEqual((await api('POST', '/api/logistica/ordem/levantar', { op })).status, 200);
+  // 160 OK + 2 rej + 4 fortes + 0 partidas + 2 abatidas + 3 sobras = 171 ≠ 200
+  assert.strictEqual((await C({ fechar: true })).status, 400);
+  assert.strictEqual((await C({ entrada: { aprovadas: 29 } })).status, 200);               // 189 OK... + resto
+  assert.strictEqual((await C({ fechar: true })).status, 200);                             // 189+2+4+2+3 = 200
+  const o = (await api('GET', '/api/levantamento')).body.ops.find((x) => x.op === op);
+  assert.strictEqual(o.aprovadas, 189);
+  assert.strictEqual(o.abatidas, 2);
+  assert.strictEqual(o.entradas.length, 3);
+});
+
 test('palavra-passe: 5 tentativas erradas bloqueiam 1 minuto (mesmo com a certa)', async () => {
   for (let i = 0; i < 5; i++) assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: 'x' + i })).status, 401);
   assert.strictEqual((await api('POST', '/api/logistica/pin', { pin: '8126' })).status, 429);
