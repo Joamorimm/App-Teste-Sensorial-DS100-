@@ -49,3 +49,4 @@ Resumo por fases. Cada versão corresponde a um zip entregue (`ds100-app-web (vN
 - v89: Colocar – campos da proposta (frascos partidos / rolhas partidas / QVs) em grelha de 3 colunas com campos maiores e nota explicativa.
 - v90: Contadeira – data de contar (= data de prova), 'ligeiras' passa a 'rejeitadas', novo campo 'sobras de rolhas rejeitadas' (informativo), total OK + sobras no ecrã.
 - v91: MISU passa a apontar FRASCOS (app calcula rolhas); cor laranja (em vez de vermelho) para mesas/contador MISU; mapa e provadores aceitam mesas dos lados A e B no mesmo dia; supervisão pode passar uma mesa para outro dia (mantém o lado); encomenda obrigatória com 0 = sem encomenda; rótulos mais claros para mudar a encomenda.
+- v92: mesas de dias anteriores ainda por levantar passam automaticamente para hoje (lados A e B, provas anteriores contam, data de origem no mapa).

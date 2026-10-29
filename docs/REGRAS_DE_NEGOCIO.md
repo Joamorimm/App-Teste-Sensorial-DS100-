@@ -90,3 +90,7 @@ Menu: Provadores (nomes) · Provadores (métricas e CSV) · Provas de uma mesa �
 3. **Nada se perde**: histórico (`movimentos`) nunca é apagado; versões restauráveis.
 4. **Contas em rolhas; colocação em frascos.**
 5. **Por ordem (OP)** — mesas servem a logística física, mas o MISU/levantamento/contadeira registam por ordem.
+
+## 3.3 Mesas de dias anteriores por levantar
+
+Uma mesa colocada em dia anterior (últimos 7 dias) que **ainda não foi levantada** passa **sozinha para hoje** na primeira utilização da app, com as suas ordens (a ordem tem de continuar). Mantém o lado (A/B), aparece no mapa com a data de origem («de dd/mm») e as provas já feitas nos dias anteriores **continuam a contar**. Mesas já levantadas ou contadas não voltam.

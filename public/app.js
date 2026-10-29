@@ -448,6 +448,7 @@ function renderLogistica() {
       let sub = '';
       if (logModo === 'colocar' || (logModo === 'editarMesas' && editDia === 'amanha')) sub = m.capacidade ? `${m.ocupado || 0}/${m.capacidade}${(m.segmentos || []).length > 1 ? ' · ' + m.segmentos.length + ' ord.' : ''}` : '';
       else sub = { sem_lote: '', levantada: 'levantada', misu: 'MISU', pronta: 'logística', colocada: 'colocada' }[m.estado] ?? `${m.feitos}/${m.necessarios}`;
+      if (m.dataOrigem && logModo !== 'colocar') sub += ` · de ${m.dataOrigem.slice(8, 10)}/${m.dataOrigem.slice(5, 7)}`;
       const sel = logModo === 'colocar' && selecionadas.has(m.mesa) ? ' sel' : '';
       html += `<div class="mesa ${m.estado}${sel}${fila.length === 1 ? ' solta' : ''}" data-mesa="${m.mesa}">${m.mesa}<small>${sub}</small></div>`;
     });

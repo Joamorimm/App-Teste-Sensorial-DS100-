@@ -175,3 +175,6 @@ ALTER TABLE lote_ops ADD COLUMN IF NOT EXISTS rolhas_partidas INTEGER;
 ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras INTEGER;
 
 ALTER TABLE contagens_op ADD COLUMN IF NOT EXISTS sobras_rej INTEGER;
+
+-- mesas de dias anteriores que ainda não foram levantadas passam para hoje; as provas contam desde o dia de origem
+ALTER TABLE lotes ADD COLUMN IF NOT EXISTS data_origem DATE;

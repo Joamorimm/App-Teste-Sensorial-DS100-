@@ -33,7 +33,7 @@ async function obterEstadoMesa(mesa, aprovador) {
 
   const feitosRes = await pool.query(
     `SELECT COUNT(DISTINCT aprovador)::int AS n FROM registos
-     WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`,
+     WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= (COALESCE((SELECT l.data_origem FROM lotes l WHERE l.mesa = registos.mesa AND l.data_planeamento = (now() AT TIME ZONE 'Europe/Lisbon')::date AND l.ativo LIMIT 1), (now() AT TIME ZONE 'Europe/Lisbon')::date)::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`,
     [mesa]
   );
   const feitos = feitosRes.rows[0].n;
@@ -48,7 +48,7 @@ async function obterEstadoMesa(mesa, aprovador) {
 
   const jaFezHojeRes = await pool.query(
     `SELECT 1 FROM registos WHERE mesa = $1 AND aprovador = $2 AND estado = 'Fechado'
-       AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon') LIMIT 1`,
+       AND hora_fecho >= (COALESCE((SELECT l.data_origem FROM lotes l WHERE l.mesa = registos.mesa AND l.data_planeamento = (now() AT TIME ZONE 'Europe/Lisbon')::date AND l.ativo LIMIT 1), (now() AT TIME ZONE 'Europe/Lisbon')::date)::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon') LIMIT 1`,
     [mesa, aprovador]
   );
   const jaFezHoje = jaFezHojeRes.rowCount > 0;

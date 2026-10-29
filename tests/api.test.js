@@ -479,11 +479,21 @@ test('MISU trabalha à mesa, não à OP: mesa partilhada por várias OPs funcion
   assert.strictEqual((await lev('A1')).aprovadas, 9979);
 });
 
-test('MISU só vê as mesas do dia da prova: lote de outro dia não conta (as mesas fecham no próprio dia)', async () => {
-  await lote('A1', 1);
-  await pool.query(`UPDATE lotes SET data_planeamento = data_planeamento - 1 WHERE mesa = 'A1'`);
-  assert.strictEqual((await api('POST', '/api/misu/A1', { ligeiros: 1, fortes: 1 })).status, 404);
-  assert.strictEqual((await api('GET', '/api/levantamento')).body.mesas.length, 0);
+test('mesas de ontem por levantar passam sozinhas para hoje (e as provas de ontem continuam a contar); levantadas ficam', async () => {
+  await lote('A1', 2); await lote('A2', 2);
+  await pool.query(`UPDATE lotes SET data_planeamento = data_planeamento - 1 WHERE mesa IN ('A1','A2')`);
+  await pool.query(`UPDATE lotes SET levantada_em = now() WHERE mesa = 'A2'`);
+  await pool.query(`INSERT INTO registos (mesa, aprovador, hora_abertura, hora_fecho, estado) VALUES ('A1','Marta Santos', now() - interval '1 day 1 hour', now() - interval '1 day', 'Fechado')`);
+  const r = (await api('GET', '/api/logistica/mesas')).body;
+  const a1 = r.mesas.find((m) => m.mesa === 'A1');
+  assert.strictEqual(a1.estado, 'em_prova');
+  assert.strictEqual(a1.feitos, 1);                                    // a prova de ontem conta
+  assert.strictEqual(r.mesas.find((m) => m.mesa === 'A2').estado, 'sem_lote');   // levantada ontem: não volta
+  assert.strictEqual((await pool.query(`SELECT 1 FROM lotes WHERE mesa = 'A1' AND data_planeamento = $1`, [hoje()])).rowCount, 1);
+  const est = await require('../logic').obterEstadoMesa('A1', 'Marta Santos');
+  assert.strictEqual(est.planeado, true);
+  assert.strictEqual(est.jaFezHoje, true);                             // a Marta já provou esta mesa
+  assert.strictEqual((await require('../logic').obterEstadoMesa('A1', 'Tânia Gonçalves')).podeAbrir, true);
 });
 
 test('rolhas por frasco 1 / 2 / 4 multiplicam os frascos', async () => {

@@ -7,6 +7,10 @@ const plan = require('./planeamento');
 
 const app = express();
 app.use(express.json());
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api/') && req.path !== '/api/saude') { try { await transitarPendentes(); } catch (e) { console.error(e.message); } }
+  next();
+});
 
 // --- Histórico: guarda TODOS os movimentos (escritas) da aplicação na tabela `movimentos` ---
 const ACOES = [
@@ -280,14 +284,14 @@ app.get('/api/logistica/mesas', async (req, res) => {
   try {
     const data = req.query.data || plan.hojeLisboa();
     const lotes = await pool.query(
-      `SELECT mesa, ordem, numero_provadores, levantada_em, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, misu_ligeiros, misu_fortes, total_rolhas, rolhas_partidas_total FROM lotes
+      `SELECT mesa, ordem, numero_provadores, levantada_em, rolhas_por_frasco, total_frascos_cliente, contadeira, qvs_colocacao, tipo, dsrol, frascos_partidos, misu_ligeiros, misu_fortes, total_rolhas, rolhas_partidas_total, to_char(data_origem, 'YYYY-MM-DD') AS data_origem FROM lotes
        WHERE data_planeamento = $1 AND ativo = true`, [data]);
     const lado = data === plan.hojeLisboa() ? await ladoHoje() : plan.ladoDoDia(data);
     const outro = lado === 'A' ? 'B' : 'A';
     const lados = lotes.rows.some((l) => l.mesa[0] === outro) ? [lado, outro].sort() : [lado];   // mesas passadas de outro dia podem trazer o outro lado
     const feitos = await pool.query(
       `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
-       WHERE estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
+       WHERE estado = 'Fechado' AND hora_fecho >= (COALESCE((SELECT l.data_origem FROM lotes l WHERE l.mesa = registos.mesa AND l.data_planeamento = (now() AT TIME ZONE 'Europe/Lisbon')::date AND l.ativo LIMIT 1), (now() AT TIME ZONE 'Europe/Lisbon')::date)::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')
        GROUP BY mesa`);
     const abertos = await pool.query(`SELECT mesa FROM registos WHERE estado = 'Aberto'`);
     const nFeitos = new Map(feitos.rows.map((r) => [r.mesa, r.n]));
@@ -320,7 +324,7 @@ app.get('/api/logistica/mesas', async (req, res) => {
         tipo: l ? l.tipo : null, dsrol: l ? l.dsrol : null, frascosPartidos: l ? l.frascos_partidos : null,
         totalRolhas: l ? derivar(l).totalRolhas : null, rolhasPartidas: l ? derivar(l).rolhasPartidas : null,
         capacidade: plan.LAYOUT[ladoM].cap[String(i)] || 0, ocupado: Math.max(0, ...(sgPorMesa.get(codigo) || []).map((s) => s.ate)),
-        segmentos: sgPorMesa.get(codigo) || [],
+        segmentos: sgPorMesa.get(codigo) || [], dataOrigem: l ? l.data_origem : null,
       });
     }
     res.json({ data, lado, mesas, filas: plan.LAYOUT[lado].filas, lados: lados.map((x) => ({ lado: x, filas: plan.LAYOUT[x].filas })) });
@@ -355,7 +359,7 @@ app.post('/api/logistica/levantar', async (req, res) => {
     if (!desfazer) {
       const f = await pool.query(
         `SELECT COUNT(DISTINCT aprovador)::int AS n FROM registos
-         WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`, [mesa]);
+         WHERE mesa = $1 AND estado = 'Fechado' AND hora_fecho >= (COALESCE((SELECT l.data_origem FROM lotes l WHERE l.mesa = registos.mesa AND l.data_planeamento = (now() AT TIME ZONE 'Europe/Lisbon')::date AND l.ativo LIMIT 1), (now() AT TIME ZONE 'Europe/Lisbon')::date)::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon')`, [mesa]);
       const l = await pool.query(
         `SELECT * FROM lotes WHERE mesa = $1 AND data_planeamento = $2 AND ativo = true`, [mesa, data]);
       if (!l.rowCount) return res.status(409).json({ erro: 'Mesa sem lote hoje.' });
@@ -477,6 +481,46 @@ async function recalcularLote(client, data, mesa) {
     [mesa, g.map((x) => x.op).join(' + '), data, amostra ? 3 : 2, Math.max(...rolhas), soma((x) => x.frascos), g.some((x) => x.contadeira),
       soma((x) => x.qvs), amostra ? 'AMOSTRA' : g[0].tipo, g.some((x) => x.dsrol), soma((x) => x.frascos_partidos),
       soma((x) => x.frascos * x.rolhas_por_frasco), soma((x) => (x.rolhas_partidas !== null && x.rolhas_partidas !== undefined ? x.rolhas_partidas : x.frascos_partidos * x.rolhas_por_frasco))]);
+}
+
+// ---- Mesas de dias anteriores por levantar: passam sozinhas para hoje (a ordem tem de continuar) ----
+// Só mesas dos últimos 7 dias, sem levantamento e sem ordens já levantadas/contadas. As provas já feitas continuam a contar (data_origem).
+let transitoBloqueadoAte = 0;
+async function transitarPendentes() {
+  const hoje = plan.hojeLisboa();
+  if (Date.now() < transitoBloqueadoAte) return;
+  const q = await pool.query(`SELECT id, mesa, to_char(data_planeamento, 'YYYY-MM-DD') AS d FROM lotes
+     WHERE ativo = true AND levantada_em IS NULL AND data_planeamento < $1::date AND data_planeamento >= $1::date - 7 ORDER BY data_planeamento, id`, [hoje]);
+  if (!q.rowCount) return;
+  let ficouParaTras = false;
+  for (const l of q.rows) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const ja = (await client.query(`SELECT 1 FROM lotes WHERE mesa = $1 AND data_planeamento = $2`, [l.mesa, hoje])).rowCount;
+      const ops = (await client.query(`SELECT DISTINCT op FROM lote_ops WHERE data = $1 AND mesa = $2`, [l.d, l.mesa])).rows.map((r) => r.op);
+      let bloqueada = !!ja;
+      for (const op of ops) {
+        const d = (await client.query(`SELECT levantada_em FROM ordens_dia WHERE data = $1 AND op = $2`, [l.d, op])).rows[0];
+        const c = (await client.query(`SELECT aprovadas FROM contagens_op WHERE data = $1 AND op = $2`, [l.d, op])).rows[0];
+        if ((d && d.levantada_em) || (c && c.aprovadas !== null && c.aprovadas !== undefined)) bloqueada = true;
+      }
+      if (bloqueada) { await client.query('ROLLBACK'); ficouParaTras = true; continue; }
+      await client.query(`UPDATE lotes SET data_planeamento = $2, data_origem = COALESCE(data_origem, $3::date) WHERE id = $1`, [l.id, hoje, l.d]);
+      await client.query(`UPDATE lote_ops SET data = $3 WHERE data = $1 AND mesa = $2`, [l.d, l.mesa, hoje]);
+      for (const op of ops) {
+        await client.query(`INSERT INTO ordens_dia (data, op, continua, qvs_logistica) SELECT $1, op, continua, qvs_logistica FROM ordens_dia WHERE data = $2 AND op = $3 ON CONFLICT (data, op) DO NOTHING`, [hoje, l.d, op]);
+        await client.query(`INSERT INTO ordens_dia (data, op, continua) VALUES ($1, $2, false) ON CONFLICT (data, op) DO NOTHING`, [hoje, op]);
+        if (!(await client.query(`SELECT 1 FROM lote_ops WHERE data = $1 AND op = $2 LIMIT 1`, [l.d, op])).rowCount) {
+          await client.query(`DELETE FROM ordens_dia WHERE data = $1 AND op = $2`, [l.d, op]);
+          await client.query(`DELETE FROM contagens_op WHERE data = $1 AND op = $2`, [l.d, op]);
+        }
+      }
+      await client.query('COMMIT');
+    } catch (err) { await client.query('ROLLBACK').catch(() => {}); console.error('transição de mesas:', err.message); ficouParaTras = true; }
+    finally { client.release(); }
+  }
+  if (ficouParaTras) transitoBloqueadoAte = Date.now() + 30000;
 }
 
 // valida o dia (mesma regra da colocação por mesas): amanhã é livre; hoje (a meio do processo) só com a palavra-passe da supervisora
@@ -638,7 +682,7 @@ async function lotesDeHoje() {
   lotes.rows.forEach((l) => { l._segs = segsPorMesa.get(l.mesa) || []; });
   const feitos = await pool.query(
     `SELECT mesa, COUNT(DISTINCT aprovador)::int AS n FROM registos
-     WHERE estado = 'Fechado' AND hora_fecho >= ((now() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon') GROUP BY mesa`);
+     WHERE estado = 'Fechado' AND hora_fecho >= (COALESCE((SELECT l.data_origem FROM lotes l WHERE l.mesa = registos.mesa AND l.data_planeamento = (now() AT TIME ZONE 'Europe/Lisbon')::date AND l.ativo LIMIT 1), (now() AT TIME ZONE 'Europe/Lisbon')::date)::timestamp AT TIME ZONE 'Europe/Lisbon') AND hora_fecho < (((now() AT TIME ZONE 'Europe/Lisbon')::date + 1)::timestamp AT TIME ZONE 'Europe/Lisbon') GROUP BY mesa`);
   const abertos = await pool.query(`SELECT mesa FROM registos WHERE estado = 'Aberto'`);
   const nFeitos = new Map(feitos.rows.map((r) => [r.mesa, r.n]));
   const emAnalise = new Set(abertos.rows.map((r) => r.mesa));
@@ -1429,7 +1473,7 @@ app.post('/api/supervisora/mover-mesa', async (req, res) => {
       if ((d && d.levantada_em) || (c && c.aprovadas !== null && c.aprovadas !== undefined)) { await client.query('ROLLBACK'); return res.status(409).json({ erro: `A ordem ${op} já foi levantada/contada hoje. Reabre-a primeiro no menu Ordens.` }); }
     }
     await client.query(`UPDATE lote_ops SET data = $3 WHERE data = $1 AND mesa = $2`, [hoje, mesa, para]);
-    await client.query(`UPDATE lotes SET data_planeamento = $2 WHERE id = $1`, [l.id, para]);
+    await client.query(`UPDATE lotes SET data_planeamento = $2, data_origem = NULL WHERE id = $1`, [l.id, para]);
     for (const op of ops) {
       await client.query(`INSERT INTO ordens_dia (data, op, continua) SELECT $1, op, continua FROM ordens_dia WHERE data = $2 AND op = $3 ON CONFLICT (data, op) DO NOTHING`, [para, hoje, op]);
       await client.query(`INSERT INTO ordens_dia (data, op, continua) VALUES ($1, $2, false) ON CONFLICT (data, op) DO NOTHING`, [para, op]);
